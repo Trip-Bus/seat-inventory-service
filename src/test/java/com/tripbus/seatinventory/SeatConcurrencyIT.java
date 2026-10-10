@@ -5,15 +5,17 @@ import com.tripbus.seatinventory.service.ExpiredHoldsSweeper;
 import com.tripbus.seatinventory.service.InventoryInitializer;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
-import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,14 +35,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * US-080: "Probar automáticamente que ningún asiento se vende dos veces".
  * 500 hilos compiten por el mismo asiento; exactamente uno lo obtiene. Se repite
- * CONCURRENCY_RUNS veces (el pipeline de CI usa 100 como gate). Requiere PostgreSQL
- * y Redis reales (TRIPBUS_IT=true).
+ * CONCURRENCY_RUNS veces (el pipeline de CI usa 100 como gate). Corre contra PostgreSQL 16 y
+ * Redis 7 reales levantados por Testcontainers (requiere Docker): Flyway aplica las migraciones
+ * REALES de db/migration (incluido el trigger V2 contra la doble venta) sobre una base nueva.
  */
-@EnabledIfEnvironmentVariable(named = "TRIPBUS_IT", matches = "true")
 @SpringBootTest
 @ActiveProfiles("it")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Testcontainers
 class SeatConcurrencyIT {
+
+    @Container
+    @ServiceConnection
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    @Container
+    @ServiceConnection(name = "redis")
+    static GenericContainer<?> redis = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
 
     private static final int THREADS = Integer.parseInt(System.getenv().getOrDefault("CONCURRENCY_THREADS", "500"));
     private static final int RUNS = Integer.parseInt(System.getenv().getOrDefault("CONCURRENCY_RUNS", "5"));
@@ -53,14 +64,6 @@ class SeatConcurrencyIT {
     private ExpiredHoldsSweeper sweeper;
     @Autowired
     private JdbcTemplate jdbc;
-    @Autowired
-    private Flyway flyway;
-
-    @BeforeAll
-    void limpiar() {
-        flyway.clean();
-        flyway.migrate();
-    }
 
     private UUID nuevoItinerario() {
         UUID itineraryId = UUID.randomUUID();

@@ -1,0 +1,84 @@
+# Entorno QA de seat-inventory-service SOLO (perfil Spring "qa"): su propia PostgreSQL, Redis con
+# contraseña y el servicio construido desde este repo.
+#
+#   cp .env.example .env           # valores de QA local (el .env no se sube a git)
+#   docker compose up -d --build   # levantar
+#   docker compose ps              # esperar a que todo esté "healthy"
+#   docker compose logs -f seat-inventory-service
+#   docker compose down            # detener conservando datos (down -v los borra)
+#
+# Qué se puede probar con este compose solo:
+#   - GET /seats/availability y GET /seats/itineraries/** funcionan solos (son públicos). Sin
+#     catalog no hay itinerarios publicados: responden lista vacía o 404 controlado.
+#   - Retener/extender/liberar asientos (/seats/holds) exige un JWT de identity y que catalog haya
+#     publicado el itinerario: pruébalo con el compose general de API-gateway.
+#   - /internal/** exige el header X-Internal-Token (INTERNAL_API_TOKEN de .env).
+# identity (18001) y catalog (18002) se buscan en tu PC vía host.docker.internal.
+#
+# OJO: no lo corras a la vez que el compose general de API-gateway: usan los mismos puertos
+# (18003, 18100, 18103) y fallaría con "port is already allocated".
+name: tripbus-seat-inventory-service
+
+services:
+  seat-inventory-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tripbus_inventory
+      POSTGRES_USER: ${DB_USERNAME:?Falta DB_USERNAME en .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en .env}
+    ports:
+      - "18103:5432"
+    volumes:
+      - seat-inventory-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Falta REDIS_PASSWORD en .env}"]
+    environment:
+      # redis-cli lee la contraseña de aquí (así no aparece en la línea de comandos).
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    ports:
+      - "18100:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  seat-inventory-service:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: qa-local
+    image: ghcr.io/trip-bus/seat-inventory-service:qa-local
+    env_file: .env
+    # Estas ganan sobre .env: dentro de Docker se habla con los contenedores por nombre y puerto
+    # interno, y con los servicios que corren en tu PC por host.docker.internal.
+    environment:
+      SPRING_PROFILES_ACTIVE: qa
+      DB_HOST: seat-inventory-db
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      IDENTITY_JWKS_URI: http://host.docker.internal:18001/.well-known/jwks.json
+      CATALOG_URL: http://host.docker.internal:18002
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "18003:18003"
+    depends_on:
+      seat-inventory-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  seat-inventory-db-data:
+  redis-data:

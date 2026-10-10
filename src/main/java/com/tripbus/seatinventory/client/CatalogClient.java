@@ -1,6 +1,7 @@
 package com.tripbus.seatinventory.client;
 
 import com.tripbus.seatinventory.config.InventoryProperties;
+import com.tripbus.seatinventory.config.RequestIdPropagationInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -24,7 +25,11 @@ public class CatalogClient {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(1000);
         factory.setReadTimeout(2000);
-        this.restClient = RestClient.builder().baseUrl(properties.catalogUrl()).requestFactory(factory).build();
+        this.restClient = RestClient.builder()
+                .baseUrl(properties.catalogUrl())
+                .requestFactory(factory)
+                .requestInterceptor(new RequestIdPropagationInterceptor())
+                .build();
     }
 
     public record SeatMap(UUID itineraryId, int capacidad, List<String> asientos) {
