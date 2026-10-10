@@ -49,6 +49,10 @@ repite 5 veces por defecto; el CI exporta `CONCURRENCY_THREADS=500` y `CONCURREN
 CONCURRENCY_THREADS=500 CONCURRENCY_RUNS=100 mvn -B verify
 ```
 
+Tiempo de referencia: en el CI (runner `ubuntu-latest`, PR #1, 2026-10-09) el paso de pruebas con el
+gate de 500 hilos × 100 ejecuciones tardó **3 min 53 s**. En local, 5 ejecuciones tardan unos 6 s
+(más el arranque de los contenedores de Testcontainers).
+
 ## Flujo de ramas y entornos
 
 ```
