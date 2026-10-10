@@ -1,0 +1,15 @@
+# Perfil "prod": servidor de producción (activa también "desplegado").
+#
+# Las reglas del inventario (retención de 10 min, extensión de 5 min, locks de Redis de 15 s / 500 ms)
+# y el barrido de retenciones vencidas (ExpiredHoldsSweeper, un solo nodo con LeaderLock en Redis)
+# son las mismas que en QA: no se cambian por entorno.
+logging:
+  level:
+    com.tripbus: INFO
+
+# Swagger/OpenAPI apagado en producción (solo IDE y QA).
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
