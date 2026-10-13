@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -43,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("it")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Testcontainers
+// Cierra el contexto al terminar: sus jobs (relay del outbox, barrido) no siguen corriendo sin contenedores.
+@DirtiesContext
 class SeatConcurrencyIT {
 
     @Container

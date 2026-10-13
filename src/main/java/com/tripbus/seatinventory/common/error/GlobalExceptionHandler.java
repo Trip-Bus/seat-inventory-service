@@ -1,7 +1,10 @@
 package com.tripbus.seatinventory.common.error;
 
+import jakarta.persistence.LockTimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -30,6 +33,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleApi(ApiException ex) {
         return ResponseEntity.status(ex.getStatus())
                 .body(ErrorResponse.of(ex.getCode(), ex.getMessage(), ex.getDetails()));
+    }
+
+    /** US-018/US-022: un bloqueo de fila que no se obtuvo a tiempo es contención, no un error interno. */
+    @ExceptionHandler({
+            PessimisticLockingFailureException.class,
+            CannotAcquireLockException.class,
+            LockTimeoutException.class})
+    public ResponseEntity<ErrorResponse> handleLocked(Exception ex) {
+        log.warn("Bloqueo no disponible: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("SEAT_LOCKED",
+                        "El asiento está siendo tomado por otro pasajero. Intenta de nuevo."));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
