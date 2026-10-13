@@ -16,7 +16,8 @@ import java.util.UUID;
 
 /**
  * ReleaseExpiredHolds: job periódico de barrido de retenciones vencidas. Corre en un único
- * nodo por ventana gracias al {@link LeaderLock} (regla dura del doc).
+ * nodo por ventana gracias al {@link LeaderLock} (regla dura del doc). Si Redis cae, el
+ * LeaderLock elige líder con un advisory lock de PostgreSQL y las retenciones siguen expirando.
  */
 @Component
 public class ExpiredHoldsSweeper {

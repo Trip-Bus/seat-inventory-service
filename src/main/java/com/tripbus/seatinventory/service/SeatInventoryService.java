@@ -2,7 +2,7 @@ package com.tripbus.seatinventory.service;
 
 import com.tripbus.seatinventory.client.CatalogClient;
 import com.tripbus.seatinventory.common.error.ApiException;
-import com.tripbus.seatinventory.common.events.EventPublisher;
+import com.tripbus.seatinventory.common.events.Outbox;
 import com.tripbus.seatinventory.config.InventoryProperties;
 import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.domain.HoldStatus;
@@ -60,7 +60,7 @@ public class SeatInventoryService {
     private final InventoryInitializer initializer;
     private final CatalogClient catalogClient;
     private final DistributedSeatLock seatLock;
-    private final EventPublisher events;
+    private final Outbox outbox;
     private final TransactionTemplate tx;
     private final InventoryProperties properties;
     private final Clock clock;
@@ -73,7 +73,7 @@ public class SeatInventoryService {
             InventoryInitializer initializer,
             CatalogClient catalogClient,
             DistributedSeatLock seatLock,
-            EventPublisher events,
+            Outbox outbox,
             TransactionTemplate tx,
             InventoryProperties properties,
             Clock clock) {
@@ -84,7 +84,7 @@ public class SeatInventoryService {
         this.initializer = initializer;
         this.catalogClient = catalogClient;
         this.seatLock = seatLock;
-        this.events = events;
+        this.outbox = outbox;
         this.tx = tx;
         this.properties = properties;
         this.clock = clock;
@@ -225,7 +225,7 @@ public class SeatInventoryService {
         payload.put("holdId", hold.getId());
         payload.put("offerId", offerId);
         payload.put("expiraEn", hold.getExpiraEn());
-        events.publishAfterCommit(InventoryEvents.SEAT_HELD, payload);
+        outbox.add(InventoryEvents.SEAT_HELD, payload);
         return hold;
     }
 
@@ -251,7 +251,7 @@ public class SeatInventoryService {
         return toResponse(hold);
     }
 
-    /** Libera los asientos de una retención activa y publica los eventos. Requiere transacción. */
+    /** Libera los asientos de una retención activa y registra los eventos en el outbox. Requiere transacción. */
     void closeHold(Hold hold, HoldStatus estadoFinal, String motivo) {
         Instant now = clock.instant();
         List<String> liberados = new ArrayList<>();
@@ -277,9 +277,9 @@ public class SeatInventoryService {
             expired.put("seatNumbers", liberados);
             expired.put("holdId", hold.getId());
             expired.put("offerId", hold.getOfferId());
-            events.publishAfterCommit(InventoryEvents.HOLD_EXPIRED, expired);
+            outbox.add(InventoryEvents.HOLD_EXPIRED, expired);
         }
-        events.publishAfterCommit(InventoryEvents.SEAT_RELEASED, payload);
+        outbox.add(InventoryEvents.SEAT_RELEASED, payload);
     }
 
     // ------------------------------------------------------------------ ExtendHold
@@ -308,7 +308,7 @@ public class SeatInventoryService {
         payload.put("offerId", hold.getOfferId());
         payload.put("expiraEn", hold.getExpiraEn());
         payload.put("extendido", true);
-        events.publishAfterCommit(InventoryEvents.SEAT_HELD, payload);
+        outbox.add(InventoryEvents.SEAT_HELD, payload);
         return toResponse(hold);
     }
 
@@ -348,7 +348,7 @@ public class SeatInventoryService {
         payload.put("holdId", hold.getId());
         payload.put("offerId", hold.getOfferId());
         payload.put("bookingId", bookingId);
-        events.publishAfterCommit(InventoryEvents.SEAT_SOLD, payload);
+        outbox.add(InventoryEvents.SEAT_SOLD, payload);
         return toResponse(hold);
     }
 
@@ -443,7 +443,7 @@ public class SeatInventoryService {
         });
     }
 
-    /** Registra el cambio en seat_audit_log y lo anuncia (SeatStateChanged) tras el commit. */
+    /** Registra el cambio en seat_audit_log y lo anuncia (SeatStateChanged) vía outbox, en la misma transacción. */
     private void audit(SeatState seat, SeatStatus anterior, String origen, Instant now) {
         auditRepository.save(new SeatAuditLog(seat.getItineraryId(), seat.getSeatNumber(), anterior, seat.getEstado(),
                 seat.getUserId(), seat.getHoldId(), origen, now));
@@ -457,7 +457,7 @@ public class SeatInventoryService {
         payload.put("estadoAnterior", anterior != null ? anterior.name() : null);
         payload.put("estadoNuevo", seat.getEstado().name());
         payload.put("offerId", seat.getOfferId());
-        events.publishAfterCommit(InventoryEvents.SEAT_STATE_CHANGED, payload);
+        outbox.add(InventoryEvents.SEAT_STATE_CHANGED, payload);
     }
 
     private SeatView toView(SeatState s, UUID requesterId) {

@@ -85,3 +85,7 @@ tripbus:
     catalog-url: ${CATALOG_URL:http://localhost:18002}
   jobs:
     sweep-interval-ms: 5000
+    # US-031: el outbox se publica cada 500 ms; los publicados con más de 7 días se borran a diario.
+    outbox-relay-ms: ${OUTBOX_RELAY_MS:500}
+    outbox-retention: 7d
+    outbox-purge-cron: "0 30 3 * * *"
