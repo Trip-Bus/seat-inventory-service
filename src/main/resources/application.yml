@@ -2,10 +2,16 @@ spring:
   application:
     name: seat-inventory-service
 
+  # "qa" y "prod" activan además el perfil "desplegado" (exige secretos, sin valores por defecto).
+  profiles:
+    group:
+      qa: desplegado
+      prod: desplegado
+
   datasource:
-    url: jdbc:postgresql://${DB_URL:localhost}:${DB_PORT:5432}/tripbus_inventory
-    username: ${DB_USERNAME:tripbus}
-    password: ${DB_PASSWORD:tripbus_local_pw}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:18103}/${DB_NAME:tripbus_inventory}
+    username: ${DB_USERNAME:inventory}
+    password: ${DB_PASSWORD:inventory_qa_pw}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
@@ -27,17 +33,18 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      port: ${REDIS_PORT:18100}
+      password: ${REDIS_PASSWORD:}
       timeout: 2s
 
   security:
     oauth2:
       resourceserver:
         jwt:
-          jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:16001/.well-known/jwks.json}
+          jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:18001/.well-known/jwks.json}
 
 server:
-  port: 16003
+  port: ${SERVER_PORT:18003}
   shutdown: graceful
 
 management:
@@ -52,9 +59,17 @@ management:
   metrics:
     tags:
       application: seat-inventory-service
+  info:
+    env:
+      enabled: true
+
+# /actuator/info: commit con el que se construyó la imagen (build-arg GIT_COMMIT del Dockerfile).
+info:
+  app:
+    commit: ${APP_COMMIT:local}
 
 tripbus:
-  internal-token: ${INTERNAL_API_TOKEN:tripbus-internal-dev-token}
+  internal-token: ${INTERNAL_API_TOKEN:tripbus_internal_qa_token}
   events:
     enabled: ${EVENTS_ENABLED:true}
     consumer-enabled: ${EVENTS_CONSUMER_ENABLED:true}
@@ -67,6 +82,10 @@ tripbus:
     max-seats-per-hold: 6
     lock-ttl: 15s
     lock-wait: 500ms
-    catalog-url: ${CATALOG_URL:http://localhost:16002}
+    catalog-url: ${CATALOG_URL:http://localhost:18002}
   jobs:
     sweep-interval-ms: 5000
+    # US-031: el outbox se publica cada 500 ms; los publicados con más de 7 días se borran a diario.
+    outbox-relay-ms: ${OUTBOX_RELAY_MS:500}
+    outbox-retention: 7d
+    outbox-purge-cron: "0 30 3 * * *"
