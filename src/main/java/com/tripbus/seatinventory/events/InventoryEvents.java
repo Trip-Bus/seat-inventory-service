@@ -14,6 +14,7 @@ public final class InventoryEvents {
     public static final String ITINERARY_CANCELLED = "ItineraryCancelled";
     public static final String PAYMENT_FAILED = "PaymentFailed";
     public static final String OFFER_CLOSED = "OfferClosed";
+    public static final String ITINERARY_RESCHEDULED = "ItineraryRescheduled";
 
     private InventoryEvents() {
     }

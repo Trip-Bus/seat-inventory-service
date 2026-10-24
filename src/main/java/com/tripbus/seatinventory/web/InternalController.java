@@ -1,12 +1,19 @@
 package com.tripbus.seatinventory.web;
 
 import com.tripbus.seatinventory.service.SeatInventoryService;
+import com.tripbus.seatinventory.service.SeatLifecycleService;
 import com.tripbus.seatinventory.web.dto.ConfirmSaleRequest;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
 import com.tripbus.seatinventory.web.dto.InternalHoldRequest;
 import com.tripbus.seatinventory.web.dto.OfferSeatsRequest;
 import com.tripbus.seatinventory.web.dto.OfferSeatsResponse;
 import com.tripbus.seatinventory.web.dto.ReleaseRequest;
+import com.tripbus.seatinventory.web.dto.RemapSeatsRequest;
+import com.tripbus.seatinventory.web.dto.RemapSeatsResponse;
+import com.tripbus.seatinventory.web.dto.SwapSeatRequest;
+import com.tripbus.seatinventory.web.dto.SwapSeatResponse;
+import com.tripbus.seatinventory.web.dto.VoidSaleRequest;
+import com.tripbus.seatinventory.web.dto.VoidSaleResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,9 +35,11 @@ import java.util.UUID;
 public class InternalController {
 
     private final SeatInventoryService inventoryService;
+    private final SeatLifecycleService lifecycleService;
 
-    public InternalController(SeatInventoryService inventoryService) {
+    public InternalController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
         this.inventoryService = inventoryService;
+        this.lifecycleService = lifecycleService;
     }
 
     @PostMapping("/holds")
@@ -64,5 +73,25 @@ public class InternalController {
     public ResponseEntity<Void> releaseOfferSeats(@PathVariable UUID offerId) {
         inventoryService.releaseOfferSeats(offerId);
         return ResponseEntity.noContent().build();
+    }
+
+    /** US-151: booking devuelve al inventario asientos vendidos a una reserva. Idempotente. */
+    @PostMapping("/sales/void")
+    public VoidSaleResponse voidSale(@Valid @RequestBody VoidSaleRequest request) {
+        return lifecycleService.voidSale(request.itineraryId(), request.bookingId(), request.seatNumbers(),
+                request.motivo());
+    }
+
+    /** US-139: la reserva cambia un asiento por otro del mismo viaje, en una sola transacción. */
+    @PostMapping("/sales/swap")
+    public SwapSeatResponse swapSeat(@Valid @RequestBody SwapSeatRequest request) {
+        return lifecycleService.swapSeat(request.itineraryId(), request.bookingId(), request.fromSeat(),
+                request.toSeat());
+    }
+
+    /** US-119: catalog cambió el bus del viaje; 409 SEATS_CONFLICT si un asiento ocupado no existe en el nuevo. */
+    @PostMapping("/itineraries/{itineraryId}/remap")
+    public RemapSeatsResponse remap(@PathVariable UUID itineraryId, @Valid @RequestBody RemapSeatsRequest request) {
+        return lifecycleService.remapSeats(itineraryId, request.seatNumbers(), request.capacidad());
     }
 }

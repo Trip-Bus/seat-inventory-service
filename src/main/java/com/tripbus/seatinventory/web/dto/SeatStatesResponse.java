@@ -5,6 +5,6 @@ import java.util.UUID;
 
 public record SeatStatesResponse(UUID itineraryId, int capacidad, Resumen resumen, List<SeatView> asientos) {
 
-    public record Resumen(long disponibles, long retenidos, long vendidos, long enOferta) {
+    public record Resumen(long disponibles, long retenidos, long vendidos, long enOferta, long bloqueados) {
     }
 }

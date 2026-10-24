@@ -9,6 +9,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.UUID;
 
 @Entity
@@ -40,6 +41,9 @@ public class SeatState {
     @Column(name = "vendido_en")
     private Instant vendidoEn;
 
+    @Column(name = "bloqueo_motivo")
+    private String bloqueoMotivo;
+
     @Version
     private long version;
 
@@ -47,6 +51,52 @@ public class SeatState {
     private Instant actualizadoEn;
 
     protected SeatState() {
+    }
+
+    /** Asiento nuevo, DISPONIBLE (US-119: llega con el bus nuevo). */
+    public SeatState(UUID id, UUID itineraryId, String seatNumber, Instant now) {
+        this.id = id;
+        this.itineraryId = itineraryId;
+        this.seatNumber = seatNumber;
+        this.estado = SeatStatus.DISPONIBLE;
+        this.actualizadoEn = now;
+    }
+
+    /** ¿Lo compró la reserva que tiene alguna de estas retenciones? */
+    public boolean vendidoA(Collection<UUID> holdIds) {
+        return estado == SeatStatus.VENDIDO && holdId != null && holdIds.contains(holdId);
+    }
+
+    /** US-151: la venta se anula y el asiento vuelve a la venta normal, sin comprador ni oferta. */
+    public void anular(Instant now) {
+        this.estado = SeatStatus.DISPONIBLE;
+        this.userId = null;
+        this.holdId = null;
+        this.offerId = null;
+        this.vendidoEn = null;
+        this.actualizadoEn = now;
+    }
+
+    /** US-139: queda vendido al mismo comprador y con la misma retención que el asiento que deja. */
+    public void venderEnCambioDe(SeatState anterior, Instant now) {
+        this.estado = SeatStatus.VENDIDO;
+        this.userId = anterior.userId;
+        this.holdId = anterior.holdId;
+        this.vendidoEn = anterior.vendidoEn;
+        this.actualizadoEn = now;
+    }
+
+    /** US-112: la empresa no lo vende. */
+    public void bloquear(String motivo, Instant now) {
+        this.estado = SeatStatus.BLOQUEADO;
+        this.bloqueoMotivo = motivo;
+        this.actualizadoEn = now;
+    }
+
+    public void desbloquear(Instant now) {
+        this.estado = SeatStatus.DISPONIBLE;
+        this.bloqueoMotivo = null;
+        this.actualizadoEn = now;
     }
 
     public boolean disponiblePara(UUID offerIdSolicitada) {
@@ -122,5 +172,9 @@ public class SeatState {
 
     public Instant getVendidoEn() {
         return vendidoEn;
+    }
+
+    public String getBloqueoMotivo() {
+        return bloqueoMotivo;
     }
 }
