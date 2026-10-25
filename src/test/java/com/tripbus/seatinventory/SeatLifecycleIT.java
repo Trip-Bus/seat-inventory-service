@@ -311,7 +311,8 @@ class SeatLifecycleIT {
 
         assertThat(inesperados).isEmpty();
         assertThat(exitos.get()).isEqualTo(1);
-        assertThat(rechazos).hasSize(hilos - 1).containsOnly("SEAT_UNAVAILABLE", "SEAT_LOCKED");
+        // Cada rechazo es uno de estos dos (cuántos de cada uno depende del orden en que llegan los hilos).
+        assertThat(rechazos).hasSize(hilos - 1).isSubsetOf("SEAT_UNAVAILABLE", "SEAT_LOCKED");
         assertThat(estado(itineraryId, destino)).isEqualTo("VENDIDO");
         // Nadie quedó con cero ni con dos asientos: siguen vendidos exactamente 100.
         assertThat(jdbc.queryForObject("select count(*) from seat_states where itinerary_id = ? "
