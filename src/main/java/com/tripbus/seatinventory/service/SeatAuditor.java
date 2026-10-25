@@ -1,6 +1,7 @@
 package com.tripbus.seatinventory.service;
 
 import com.tripbus.seatinventory.common.events.Outbox;
+import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.domain.SeatAuditLog;
 import com.tripbus.seatinventory.domain.SeatState;
 import com.tripbus.seatinventory.domain.SeatStatus;
@@ -9,7 +10,10 @@ import com.tripbus.seatinventory.repository.SeatAuditLogRepository;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -48,5 +52,26 @@ public class SeatAuditor {
         payload.put("estadoNuevo", seat.getEstado().name());
         payload.put("offerId", seat.getOfferId());
         outbox.add(InventoryEvents.SEAT_STATE_CHANGED, payload);
+    }
+
+    /**
+     * ¿Alguna de estas retenciones ya dejó el asiento con este origen (patrón LIKE)? Lo que hace
+     * idempotentes la anulación y el cambio de asiento: el asiento ya no tiene dueño, la auditoría sí.
+     */
+    public boolean yaLiberadoPor(SeatState seat, Collection<UUID> holdIds, String origen) {
+        return !holdIds.isEmpty()
+                && auditRepository.yaLiberadoPor(seat.getItineraryId(), seat.getSeatNumber(), holdIds, origen);
+    }
+
+    /** SeatReleased de asientos vendidos que vuelven al inventario (anulación o cambio de asiento). */
+    public void anunciarLiberados(Hold hold, List<String> seats, UUID bookingId, String motivo) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("itineraryId", hold.getItineraryId());
+        payload.put("seatNumbers", seats);
+        payload.put("holdId", hold.getId());
+        payload.put("offerId", hold.getOfferId());
+        payload.put("bookingId", bookingId);
+        payload.put("motivo", motivo);
+        outbox.add(InventoryEvents.SEAT_RELEASED, payload);
     }
 }

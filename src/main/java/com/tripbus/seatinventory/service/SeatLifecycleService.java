@@ -1,16 +1,13 @@
 package com.tripbus.seatinventory.service;
 
 import com.tripbus.seatinventory.common.error.ApiException;
-import com.tripbus.seatinventory.common.events.Outbox;
 import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.domain.KnownItinerary;
 import com.tripbus.seatinventory.domain.SeatState;
 import com.tripbus.seatinventory.domain.SeatStatus;
 import com.tripbus.seatinventory.domain.VoidReason;
-import com.tripbus.seatinventory.events.InventoryEvents;
 import com.tripbus.seatinventory.repository.HoldRepository;
 import com.tripbus.seatinventory.repository.KnownItineraryRepository;
-import com.tripbus.seatinventory.repository.SeatAuditLogRepository;
 import com.tripbus.seatinventory.repository.SeatStateRepository;
 import com.tripbus.seatinventory.web.dto.BlockSeatsResponse;
 import com.tripbus.seatinventory.web.dto.RemapSeatsResponse;
@@ -57,14 +54,13 @@ public class SeatLifecycleService {
     static final String ORIGEN_UNBLOCK = "UNBLOCK";
     static final String ORIGEN_REMAP = "REMAP";
     private static final String ASIENTOS = "asientos";
+    private static final String SEAT_UNAVAILABLE = "SEAT_UNAVAILABLE";
 
     private final SeatStateRepository seatRepository;
     private final HoldRepository holdRepository;
     private final KnownItineraryRepository itineraryRepository;
-    private final SeatAuditLogRepository auditRepository;
     private final SeatAuditor auditor;
     private final DistributedSeatLock seatLock;
-    private final Outbox outbox;
     private final TransactionTemplate tx;
     private final Clock clock;
 
@@ -72,19 +68,15 @@ public class SeatLifecycleService {
             SeatStateRepository seatRepository,
             HoldRepository holdRepository,
             KnownItineraryRepository itineraryRepository,
-            SeatAuditLogRepository auditRepository,
             SeatAuditor auditor,
             DistributedSeatLock seatLock,
-            Outbox outbox,
             TransactionTemplate tx,
             Clock clock) {
         this.seatRepository = seatRepository;
         this.holdRepository = holdRepository;
         this.itineraryRepository = itineraryRepository;
-        this.auditRepository = auditRepository;
         this.auditor = auditor;
         this.seatLock = seatLock;
-        this.outbox = outbox;
         this.tx = tx;
         this.clock = clock;
     }
@@ -114,7 +106,7 @@ public class SeatLifecycleService {
         for (SeatState seat : locked) {
             if (seat.vendidoA(holds.keySet())) {
                 aAnular.add(seat);
-            } else if (!yaLiberadoPor(seat, holds.keySet(), "VOID%")) {
+            } else if (!auditor.yaLiberadoPor(seat, holds.keySet(), "VOID%")) {
                 ajenos.add(seat.getSeatNumber());
             }
         }
@@ -133,7 +125,7 @@ public class SeatLifecycleService {
         }
         seatRepository.flush();
         anuladosPorHold.forEach((holdId, numeros) ->
-                publishReleased(holds.get(holdId), numeros, bookingId, motivo.name()));
+                auditor.anunciarLiberados(holds.get(holdId), numeros, bookingId, motivo.name()));
 
         List<String> anulados = aAnular.stream().map(SeatState::getSeatNumber).sorted(SeatOrder.NATURAL).toList();
         return new VoidSaleResponse(itineraryId, bookingId, motivo.name(), anulados, views(locked));
@@ -164,7 +156,7 @@ public class SeatLifecycleService {
             return Objects.requireNonNull(tx.execute(status -> doSwap(itineraryId, bookingId, from, to, seats)));
         } catch (DataIntegrityViolationException e) {
             // Solo ocurre si las dos primeras líneas fallaran: la BD tiene la última palabra.
-            throw ApiException.conflict("SEAT_UNAVAILABLE", "El asiento " + to + " ya no está disponible");
+            throw ApiException.conflict(SEAT_UNAVAILABLE, "El asiento " + to + " ya no está disponible");
         }
     }
 
@@ -176,7 +168,7 @@ public class SeatLifecycleService {
         SeatState destino = locked.get(to);
 
         if (!origen.vendidoA(holds.keySet())) {
-            if (destino.vendidoA(holds.keySet()) && yaLiberadoPor(origen, holds.keySet(), ORIGEN_SWAP)) {
+            if (destino.vendidoA(holds.keySet()) && auditor.yaLiberadoPor(origen, holds.keySet(), ORIGEN_SWAP)) {
                 // El mismo cambio ya se hizo: se responde el estado actual.
                 return new SwapSeatResponse(itineraryId, bookingId, destino.getHoldId(), from, to,
                         views(List.of(origen, destino)));
@@ -184,7 +176,7 @@ public class SeatLifecycleService {
             throw notOwned(List.of(from));
         }
         if (destino.getEstado() != SeatStatus.DISPONIBLE) {
-            throw new ApiException(HttpStatus.CONFLICT, "SEAT_UNAVAILABLE",
+            throw new ApiException(HttpStatus.CONFLICT, SEAT_UNAVAILABLE,
                     "El asiento " + to + " no está disponible", Map.of(ASIENTOS, List.of(to)));
         }
 
@@ -197,7 +189,7 @@ public class SeatLifecycleService {
         auditor.registrar(origen, SeatStatus.VENDIDO, ORIGEN_SWAP, now, userId, hold.getId());
         hold.cambiarAsiento(from, to);
         seatRepository.flush();
-        publishReleased(hold, List.of(from), bookingId, "CAMBIO_DE_ASIENTO");
+        auditor.anunciarLiberados(hold, List.of(from), bookingId, "CAMBIO_DE_ASIENTO");
 
         return new SwapSeatResponse(itineraryId, bookingId, hold.getId(), from, to, views(List.of(origen, destino)));
     }
@@ -220,7 +212,7 @@ public class SeatLifecycleService {
                         .filter(s -> s.getEstado() != SeatStatus.DISPONIBLE && s.getEstado() != SeatStatus.BLOQUEADO)
                         .map(SeatState::getSeatNumber).sorted(SeatOrder.NATURAL).toList();
                 if (!ocupados.isEmpty()) {
-                    throw new ApiException(HttpStatus.CONFLICT, "SEAT_UNAVAILABLE",
+                    throw new ApiException(HttpStatus.CONFLICT, SEAT_UNAVAILABLE,
                             "Solo se pueden bloquear asientos disponibles: " + String.join(", ", ocupados),
                             Map.of(ASIENTOS, ocupados));
                 }
@@ -335,11 +327,7 @@ public class SeatLifecycleService {
     // ------------------------------------------------------------------ utilidades
 
     private static List<String> validSeats(List<String> requested) {
-        List<String> seats = SeatOrder.sortedDistinct(requested == null ? List.of() : requested);
-        if (seats.isEmpty() || seats.stream().anyMatch(String::isBlank)) {
-            throw ApiException.badRequest("INVALID_SEATS", "Debe indicar al menos un asiento válido");
-        }
-        return seats;
+        return SeatInventoryService.validSeats(requested);
     }
 
     private KnownItinerary requireItinerary(UUID itineraryId) {
@@ -365,35 +353,12 @@ public class SeatLifecycleService {
 
     /** SELECT ... FOR UPDATE de los asientos pedidos; 404 si alguno no existe en el bus. */
     private List<SeatState> lockExisting(UUID itineraryId, List<String> seats) {
-        List<SeatState> locked = seatRepository.lockSeats(itineraryId, seats);
-        if (locked.size() != seats.size()) {
-            Set<String> found = locked.stream().map(SeatState::getSeatNumber).collect(Collectors.toSet());
-            List<String> missing = seats.stream().filter(s -> !found.contains(s)).toList();
-            throw new ApiException(HttpStatus.NOT_FOUND, "SEAT_NOT_FOUND",
-                    "Asiento(s) inexistente(s) en este bus: " + String.join(", ", missing), Map.of(ASIENTOS, missing));
-        }
-        return locked;
-    }
-
-    private boolean yaLiberadoPor(SeatState seat, Collection<UUID> holdIds, String origen) {
-        return !holdIds.isEmpty()
-                && auditRepository.yaLiberadoPor(seat.getItineraryId(), seat.getSeatNumber(), holdIds, origen);
+        return SeatInventoryService.requireAllFound(seatRepository.lockSeats(itineraryId, seats), seats);
     }
 
     private static ApiException notOwned(List<String> seats) {
         return new ApiException(HttpStatus.CONFLICT, "SEAT_NOT_OWNED",
                 "Asiento(s) que no pertenecen a esta reserva: " + String.join(", ", seats), Map.of(ASIENTOS, seats));
-    }
-
-    private void publishReleased(Hold hold, List<String> seats, UUID bookingId, String motivo) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("itineraryId", hold.getItineraryId());
-        payload.put("seatNumbers", seats);
-        payload.put("holdId", hold.getId());
-        payload.put("offerId", hold.getOfferId());
-        payload.put("bookingId", bookingId);
-        payload.put("motivo", motivo);
-        outbox.add(InventoryEvents.SEAT_RELEASED, payload);
     }
 
     private static List<SeatView> views(Collection<SeatState> seats) {

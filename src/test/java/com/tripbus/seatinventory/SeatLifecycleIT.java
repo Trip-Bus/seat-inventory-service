@@ -1,5 +1,6 @@
 package com.tripbus.seatinventory;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tripbus.seatinventory.common.error.ApiException;
@@ -600,7 +601,7 @@ class SeatLifecycleIT {
                 objectMapper.valueToTree(payload)));
     }
 
-    private String json(Object value) throws Exception {
+    private String json(Object value) throws JsonProcessingException {
         return objectMapper.writeValueAsString(value);
     }
 

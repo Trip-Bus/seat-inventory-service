@@ -175,10 +175,7 @@ public class SeatInventoryService {
      * 3) restricciones de la BD (único por asiento + trigger anti doble venta).
      */
     public HoldResponse holdSeats(UUID itineraryId, List<String> requestedSeats, UUID userId, UUID offerId) {
-        List<String> seats = SeatOrder.sortedDistinct(requestedSeats == null ? List.of() : requestedSeats);
-        if (seats.isEmpty() || seats.stream().anyMatch(String::isBlank)) {
-            throw ApiException.badRequest("INVALID_SEATS", "Debe indicar al menos un asiento válido");
-        }
+        List<String> seats = validSeats(requestedSeats);
         if (seats.size() > properties.maxSeatsPerHold()) {
             throw ApiException.badRequest("TOO_MANY_SEATS",
                     "Solo se pueden retener hasta " + properties.maxSeatsPerHold() + " asientos por compra");
@@ -199,14 +196,7 @@ public class SeatInventoryService {
 
     private Hold doHold(UUID itineraryId, List<String> seats, UUID userId, UUID offerId) {
         Instant now = clock.instant();
-        List<SeatState> locked = seatRepository.lockSeats(itineraryId, seats);
-        if (locked.size() != seats.size()) {
-            Set<String> found = locked.stream().map(SeatState::getSeatNumber).collect(Collectors.toSet());
-            List<String> missing = seats.stream().filter(s -> !found.contains(s)).toList();
-            throw new ApiException(HttpStatus.NOT_FOUND, "SEAT_NOT_FOUND",
-                    "Asiento(s) inexistente(s) en este bus: " + String.join(", ", missing),
-                    Map.of("asientos", missing));
-        }
+        List<SeatState> locked = requireAllFound(seatRepository.lockSeats(itineraryId, seats), seats);
         // US-018: un asiento ocupado (retenido, vendido o de otra oferta) no se puede seleccionar.
         List<String> ocupados = locked.stream().filter(s -> !s.disponiblePara(offerId))
                 .map(SeatState::getSeatNumber).toList();
@@ -448,6 +438,27 @@ public class SeatInventoryService {
             return itineraryRepository.findById(itineraryId)
                     .orElseThrow(() -> ApiException.notFound("ITINERARY_NOT_FOUND", "El itinerario no existe"));
         });
+    }
+
+    /** Asientos pedidos, sin repetir y en orden natural; 400 INVALID_SEATS si no hay ninguno válido. */
+    static List<String> validSeats(List<String> requested) {
+        List<String> seats = SeatOrder.sortedDistinct(requested == null ? List.of() : requested);
+        if (seats.isEmpty() || seats.stream().anyMatch(String::isBlank)) {
+            throw ApiException.badRequest("INVALID_SEATS", "Debe indicar al menos un asiento válido");
+        }
+        return seats;
+    }
+
+    /** 404 SEAT_NOT_FOUND (con details.asientos) si alguno de los asientos pedidos no existe en el bus. */
+    static List<SeatState> requireAllFound(List<SeatState> locked, List<String> seats) {
+        if (locked.size() != seats.size()) {
+            Set<String> found = locked.stream().map(SeatState::getSeatNumber).collect(Collectors.toSet());
+            List<String> missing = seats.stream().filter(s -> !found.contains(s)).toList();
+            throw new ApiException(HttpStatus.NOT_FOUND, "SEAT_NOT_FOUND",
+                    "Asiento(s) inexistente(s) en este bus: " + String.join(", ", missing),
+                    Map.of("asientos", missing));
+        }
+        return locked;
     }
 
     /** Registra el cambio en seat_audit_log y lo anuncia (SeatStateChanged) vía outbox, en la misma transacción. */
