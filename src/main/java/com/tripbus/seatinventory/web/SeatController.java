@@ -1,12 +1,17 @@
 package com.tripbus.seatinventory.web;
 
 import com.tripbus.seatinventory.common.security.CurrentUser;
+import com.tripbus.seatinventory.service.Actor;
 import com.tripbus.seatinventory.service.SeatInventoryService;
+import com.tripbus.seatinventory.service.SeatLifecycleService;
 import com.tripbus.seatinventory.web.dto.AvailabilityResponse;
+import com.tripbus.seatinventory.web.dto.BlockSeatsRequest;
+import com.tripbus.seatinventory.web.dto.BlockSeatsResponse;
 import com.tripbus.seatinventory.web.dto.HoldRequest;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
 import com.tripbus.seatinventory.web.dto.SeatStatesResponse;
 import com.tripbus.seatinventory.web.dto.SeatView;
+import com.tripbus.seatinventory.web.dto.UnblockSeatsRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,22 +35,24 @@ import java.util.UUID;
 public class SeatController {
 
     private final SeatInventoryService inventoryService;
+    private final SeatLifecycleService lifecycleService;
 
-    public SeatController(SeatInventoryService inventoryService) {
+    public SeatController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
         this.inventoryService = inventoryService;
+        this.lifecycleService = lifecycleService;
     }
 
     /** GetSeatStates: estado de todos los asientos (US-016/US-017). */
     @GetMapping("/itineraries/{itineraryId}")
     public SeatStatesResponse seatStates(@PathVariable UUID itineraryId, Authentication authentication) {
-        return inventoryService.getSeatStates(itineraryId, optionalUser(authentication));
+        return inventoryService.getSeatStates(itineraryId, optionalActor(authentication));
     }
 
     /** GetSeatState: estado de un asiento. */
     @GetMapping("/itineraries/{itineraryId}/{seatNumber}")
     public SeatView seatState(@PathVariable UUID itineraryId, @PathVariable String seatNumber,
                               Authentication authentication) {
-        return inventoryService.getSeatState(itineraryId, seatNumber, optionalUser(authentication));
+        return inventoryService.getSeatState(itineraryId, seatNumber, optionalActor(authentication));
     }
 
     /** Disponibilidad agregada (la usa Catalog en la búsqueda). */
@@ -80,7 +87,27 @@ public class SeatController {
         return ResponseEntity.noContent().build();
     }
 
-    private static UUID optionalUser(Authentication authentication) {
-        return authentication instanceof JwtAuthenticationToken ? CurrentUser.id(authentication) : null;
+    /** US-112: bloquea asientos DISPONIBLE (OPERADOR de la empresa del viaje o ADMIN). */
+    @PostMapping("/itineraries/{itineraryId}/blocks")
+    public BlockSeatsResponse block(@PathVariable UUID itineraryId, @Valid @RequestBody BlockSeatsRequest request,
+                                    Authentication authentication) {
+        return lifecycleService.blockSeats(itineraryId, request.seatNumbers(), request.motivo(),
+                actor(authentication));
+    }
+
+    /** US-112: devuelve a la venta asientos BLOQUEADO. */
+    @DeleteMapping("/itineraries/{itineraryId}/blocks")
+    public BlockSeatsResponse unblock(@PathVariable UUID itineraryId, @Valid @RequestBody UnblockSeatsRequest request,
+                                      Authentication authentication) {
+        return lifecycleService.unblockSeats(itineraryId, request.seatNumbers(), actor(authentication));
+    }
+
+    private static Actor optionalActor(Authentication authentication) {
+        return authentication instanceof JwtAuthenticationToken ? actor(authentication) : null;
+    }
+
+    private static Actor actor(Authentication authentication) {
+        return new Actor(CurrentUser.id(authentication), CurrentUser.role(authentication),
+                CurrentUser.companyId(authentication));
     }
 }

@@ -5,6 +5,7 @@ import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.common.events.DomainEventHandler;
 import com.tripbus.seatinventory.common.events.EventEnvelope;
 import com.tripbus.seatinventory.service.SeatInventoryService;
+import com.tripbus.seatinventory.service.SeatLifecycleService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -15,22 +16,29 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-/** Eventos que consume Seat Inventory (doc: ItineraryPublished, ItineraryCancelled, PaymentFailed). */
+/**
+ * Eventos que consume Seat Inventory (doc: ItineraryPublished, ItineraryCancelled, PaymentFailed; además
+ * OfferClosed e ItineraryRescheduled).
+ */
 @Component
 public class InventoryEventsHandler implements DomainEventHandler {
 
     private static final Logger log = LoggerFactory.getLogger(InventoryEventsHandler.class);
+    private static final String ITINERARY_ID = "itineraryId";
+    private static final String FECHA_SALIDA = "fechaSalida";
 
     private final SeatInventoryService inventoryService;
+    private final SeatLifecycleService lifecycleService;
 
-    public InventoryEventsHandler(SeatInventoryService inventoryService) {
+    public InventoryEventsHandler(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
         this.inventoryService = inventoryService;
+        this.lifecycleService = lifecycleService;
     }
 
     @Override
     public Set<String> eventTypes() {
         return Set.of(InventoryEvents.ITINERARY_PUBLISHED, InventoryEvents.ITINERARY_CANCELLED,
-                InventoryEvents.PAYMENT_FAILED, InventoryEvents.OFFER_CLOSED);
+                InventoryEvents.PAYMENT_FAILED, InventoryEvents.OFFER_CLOSED, InventoryEvents.ITINERARY_RESCHEDULED);
     }
 
     @Override
@@ -40,13 +48,14 @@ public class InventoryEventsHandler implements DomainEventHandler {
             case InventoryEvents.ITINERARY_PUBLISHED -> {
                 List<String> seats = new ArrayList<>();
                 p.path("seatNumbers").forEach(n -> seats.add(n.asText()));
-                Instant salida = p.hasNonNull("fechaSalida") ? Instant.parse(p.get("fechaSalida").asText()) : null;
+                UUID companyId = p.hasNonNull("companyId") ? uuid(p, "companyId") : null;
                 if (!seats.isEmpty()) {
-                    inventoryService.onItineraryPublished(uuid(p, "itineraryId"), seats, salida);
+                    inventoryService.onItineraryPublished(uuid(p, ITINERARY_ID), seats, instant(p, FECHA_SALIDA),
+                            companyId);
                 }
             }
             case InventoryEvents.ITINERARY_CANCELLED ->
-                    inventoryService.onItineraryCancelled(uuid(p, "itineraryId"), p.path("motivo").asText(""));
+                    inventoryService.onItineraryCancelled(uuid(p, ITINERARY_ID), p.path("motivo").asText(""));
             case InventoryEvents.PAYMENT_FAILED -> {
                 if (p.hasNonNull("holdId")) {
                     try {
@@ -58,6 +67,12 @@ public class InventoryEventsHandler implements DomainEventHandler {
                 }
             }
             case InventoryEvents.OFFER_CLOSED -> inventoryService.releaseOfferSeats(uuid(p, "offerId"));
+            case InventoryEvents.ITINERARY_RESCHEDULED -> {
+                Instant salida = instant(p, FECHA_SALIDA);
+                if (salida != null) {
+                    lifecycleService.onItineraryRescheduled(uuid(p, ITINERARY_ID), salida);
+                }
+            }
             default -> {
             }
         }
@@ -65,5 +80,9 @@ public class InventoryEventsHandler implements DomainEventHandler {
 
     private static UUID uuid(JsonNode p, String field) {
         return UUID.fromString(p.path(field).asText());
+    }
+
+    private static Instant instant(JsonNode p, String field) {
+        return p.hasNonNull(field) ? Instant.parse(p.get(field).asText()) : null;
     }
 }

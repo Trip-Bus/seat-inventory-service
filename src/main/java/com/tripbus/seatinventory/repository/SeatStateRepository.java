@@ -32,6 +32,11 @@ public interface SeatStateRepository extends JpaRepository<SeatState, UUID> {
     List<SeatState> lockSeats(@Param("itineraryId") UUID itineraryId,
                               @Param("seatNumbers") Collection<String> seatNumbers);
 
+    /** US-119: todos los asientos del viaje, en el mismo orden determinista que {@link #lockSeats}. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from SeatState s where s.itineraryId = :itineraryId order by s.seatNumber asc")
+    List<SeatState> lockByItinerary(@Param("itineraryId") UUID itineraryId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from SeatState s where s.holdId = :holdId order by s.seatNumber asc")
     List<SeatState> lockByHold(@Param("holdId") UUID holdId);

@@ -25,6 +25,12 @@ public interface HoldRepository extends JpaRepository<Hold, UUID> {
                                                 @Param("now") Instant now,
                                                 Pageable pageable);
 
+    /** Retenciones confirmadas de una reserva en un viaje, bloqueadas en orden por id (US-151/US-139). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select h from Hold h where h.itineraryId = :itineraryId and h.bookingId = :bookingId order by h.id asc")
+    List<Hold> lockByItineraryAndBooking(@Param("itineraryId") UUID itineraryId,
+                                         @Param("bookingId") UUID bookingId);
+
     @Query("select h.id from Hold h where h.itineraryId = :itineraryId and h.estado = :estado")
     List<UUID> findIdsByItineraryIdAndEstado(@Param("itineraryId") UUID itineraryId,
                                              @Param("estado") HoldStatus estado);

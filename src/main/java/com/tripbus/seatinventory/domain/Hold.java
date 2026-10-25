@@ -91,6 +91,17 @@ public class Hold {
         this.estado = estadoFinal;
     }
 
+    /** US-151: el asiento anulado deja de ser parte de la compra (la auditoría conserva que lo fue). */
+    public void quitarAsiento(String seatNumber) {
+        this.seatNumbers.remove(seatNumber);
+    }
+
+    /** US-139: la compra cambia un asiento por otro del mismo viaje. */
+    public void cambiarAsiento(String fromSeat, String toSeat) {
+        this.seatNumbers.remove(fromSeat);
+        this.seatNumbers.add(toSeat);
+    }
+
     public UUID getId() {
         return id;
     }

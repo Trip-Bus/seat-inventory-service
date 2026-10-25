@@ -34,11 +34,10 @@
 
         <!-- Mínimos de cobertura total que exige jacoco:check (ver jacoco-maven-plugin).
              La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.
-             Fijados con la medición del 2026-10-12 (outbox, US-031) redondeada hacia abajo al 5 %:
-             líneas 68,9 % -> 0.65; ramas 50,5 % -> 0.50 (por debajo del 0.60 de referencia: subirlo es la
-             próxima meta). -->
-        <jacoco.minimo.lineas>0.65</jacoco.minimo.lineas>
-        <jacoco.minimo.ramas>0.50</jacoco.minimo.ramas>
+             Fijados con la medición del 2026-10-24 (Sprint 3, US-151/US-139/US-112) redondeada hacia abajo
+             al 5 %: líneas 86,6 % -> 0.85; ramas 73,5 % -> 0.70. -->
+        <jacoco.minimo.lineas>0.85</jacoco.minimo.lineas>
+        <jacoco.minimo.ramas>0.70</jacoco.minimo.ramas>
 
         <!-- SonarQube Cloud: el análisis lo lanza el CI solo en develop (push y PR con base develop)
              cuando existe el secreto SONAR_TOKEN. El plan Free analiza una única rama. -->
@@ -57,6 +56,8 @@
         <sonar.coverage.exclusions>
             **/SeatInventoryApplication.java,
             **/web/dto/AvailabilityResponse.java,
+            **/web/dto/BlockSeatsRequest.java,
+            **/web/dto/BlockSeatsResponse.java,
             **/web/dto/ConfirmSaleRequest.java,
             **/web/dto/HoldRequest.java,
             **/web/dto/HoldResponse.java,
@@ -64,8 +65,15 @@
             **/web/dto/OfferSeatsRequest.java,
             **/web/dto/OfferSeatsResponse.java,
             **/web/dto/ReleaseRequest.java,
+            **/web/dto/RemapSeatsRequest.java,
+            **/web/dto/RemapSeatsResponse.java,
             **/web/dto/SeatStatesResponse.java,
             **/web/dto/SeatView.java,
+            **/web/dto/SwapSeatRequest.java,
+            **/web/dto/SwapSeatResponse.java,
+            **/web/dto/UnblockSeatsRequest.java,
+            **/web/dto/VoidSaleRequest.java,
+            **/web/dto/VoidSaleResponse.java,
             **/domain/SeatAuditLog.java,
             **/common/events/ProcessedEvent.java,
             **/config/OpenApiConfig.java
@@ -234,6 +242,8 @@
                     <excludes>
                         <exclude>**/SeatInventoryApplication.class</exclude>
                         <exclude>**/web/dto/AvailabilityResponse.class</exclude>
+                        <exclude>**/web/dto/BlockSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/BlockSeatsResponse.class</exclude>
                         <exclude>**/web/dto/ConfirmSaleRequest.class</exclude>
                         <exclude>**/web/dto/HoldRequest.class</exclude>
                         <exclude>**/web/dto/HoldResponse.class</exclude>
@@ -241,8 +251,15 @@
                         <exclude>**/web/dto/OfferSeatsRequest.class</exclude>
                         <exclude>**/web/dto/OfferSeatsResponse.class</exclude>
                         <exclude>**/web/dto/ReleaseRequest.class</exclude>
+                        <exclude>**/web/dto/RemapSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/RemapSeatsResponse.class</exclude>
                         <exclude>**/web/dto/SeatStatesResponse*.class</exclude>
                         <exclude>**/web/dto/SeatView.class</exclude>
+                        <exclude>**/web/dto/SwapSeatRequest.class</exclude>
+                        <exclude>**/web/dto/SwapSeatResponse.class</exclude>
+                        <exclude>**/web/dto/UnblockSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/VoidSaleRequest.class</exclude>
+                        <exclude>**/web/dto/VoidSaleResponse.class</exclude>
                         <exclude>**/domain/SeatAuditLog.class</exclude>
                         <exclude>**/common/events/ProcessedEvent.class</exclude>
                         <exclude>**/config/OpenApiConfig.class</exclude>

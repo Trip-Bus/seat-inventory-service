@@ -7,34 +7,113 @@ distribuidos y confirmación de venta. **Ningún asiento se vende dos veces.**
 
 **Stack:** Java 21 · Spring Boot 3.5.16 · PostgreSQL 16 · Redis 7
 
-**HU:** US-016, US-017, US-018, US-022, US-025, US-026, US-080 · **Puerto:** 18003 · **BD:** `tripbus_inventory` (puerto QA 18103)
+**HU:** US-016, US-017, US-018, US-022, US-025, US-026, US-080, US-112, US-119 (soporte), US-139, US-151 · **Puerto:** 18003 · **BD:** `tripbus_inventory` (puerto QA 18103)
 
 ## Tres líneas de defensa contra la doble venta
 
 1. **Lock distribuido en Redis** por asiento (`lock:{itinerario:<id>}:asiento:<n>`, TTL 15 s, token + liberación con Lua), adquiridos en orden ascendente; si no obtiene todos en 500 ms libera y responde 409.
-2. **Base de datos**: único `(itinerary_id, seat_number)` y un *trigger* que rechaza revender o retener un asiento `VENDIDO`.
+2. **Base de datos**: único `(itinerary_id, seat_number)` y un *trigger* que rechaza revender, retener, ofertar o bloquear un asiento `VENDIDO` (solo puede volver a `DISPONIBLE`, por una anulación).
 3. **`SELECT … FOR UPDATE`** en orden determinista dentro de la transacción.
 
-Si Redis cae, el servicio sigue funcionando con las líneas 2 y 3 (sin sobreventa).
+Si Redis cae, el servicio sigue funcionando con las líneas 2 y 3 (sin sobreventa). Las tres líneas se
+aplican a **todas** las operaciones que cambian asientos: retener, vender, ofertar, anular, cambiar de
+asiento, bloquear y cambiar el bus.
+
+## Estados del asiento
+
+| Estado | Significa | Pasa a |
+|---|---|---|
+| `DISPONIBLE` | a la venta | `RETENIDO`, `EN_OFERTA`, `BLOQUEADO`; `VENDIDO` solo por un cambio de asiento (US-139) |
+| `RETENIDO` | retención de 10 min (+5 una vez) | `VENDIDO` (ConfirmSale), `DISPONIBLE`/`EN_OFERTA` (liberada o expirada) |
+| `VENDIDO` | comprado | solo `DISPONIBLE` (anulación US-151 o cambio de asiento US-139) |
+| `EN_OFERTA` | reservado para una oferta relámpago | `RETENIDO` (solo por esa oferta), `DISPONIBLE` (OfferClosed) |
+| `BLOQUEADO` | la empresa no lo vende (US-112), con motivo | `DISPONIBLE` (desbloqueo) |
+
+Un asiento `BLOQUEADO` no se puede retener ni ofertar y no cuenta en `/seats/availability` (ni en
+`disponibles` ni en `total`). La base lo exige con dos restricciones: todo `BLOQUEADO` tiene
+`bloqueo_motivo` y ningún otro estado lo tiene.
 
 ## API pública (vía API Gateway)
 
 | Método | Endpoint | Doc |
 |---|---|---|
-| GET | `/seats/itineraries/{id}` | GetSeatStates (estados + resumen; `propio` marca los del usuario) |
+| GET | `/seats/itineraries/{id}` | GetSeatStates (estados + resumen con `bloqueados`; `propio` marca los del usuario) |
 | GET | `/seats/itineraries/{id}/{asiento}` | GetSeatState |
-| GET | `/seats/availability?itineraryIds=a,b` | disponibilidad para la búsqueda |
+| GET | `/seats/availability?itineraryIds=a,b` | disponibilidad para la búsqueda (sin los `BLOQUEADO`) |
 | POST | `/seats/holds` `{itineraryId, seatNumbers}` | HoldSeats — 201, o 409 `SEAT_UNAVAILABLE`/`SEAT_LOCKED` |
 | GET | `/seats/holds/{id}` | retención con `segundosRestantes` (cuenta regresiva) |
 | POST | `/seats/holds/{id}/extend` | ExtendHold (una vez, +5 min) |
 | DELETE | `/seats/holds/{id}` | ReleaseHold |
+| POST | `/seats/itineraries/{id}/blocks` `{seatNumbers, motivo}` | US-112: bloquea asientos `DISPONIBLE`; 409 `SEAT_UNAVAILABLE` (con `details.asientos`) si alguno está `RETENIDO`, `VENDIDO` o `EN_OFERTA` (entonces no bloquea ninguno) |
+| DELETE | `/seats/itineraries/{id}/blocks` `{seatNumbers}` | US-112: devuelve a la venta los `BLOQUEADO` |
 
 Los `GET` de `/seats/itineraries/**` y `/seats/availability` son públicos; el resto exige JWT de identity.
 
-API interna (`X-Internal-Token`): `POST /internal/holds`, `GET /internal/holds/{id}`, `POST /internal/holds/{id}/confirm` (ConfirmSale), `POST /internal/holds/{id}/release`, `POST /internal/offers/{offerId}/seats`, `POST /internal/offers/{offerId}/release`.
+**Bloqueos (US-112):** solo el `OPERADOR` de la empresa del viaje (claim `companyId` = `itineraries.company_id`)
+o un `ADMIN`; cualquier otro recibe 403 `NOT_ITINERARY_MANAGER`. `company_id` se llena con el `companyId` de
+`ItineraryPublished`; los itinerarios anteriores quedan en `NULL` y solo los gestiona el `ADMIN`. Los dos
+endpoints son idempotentes y responden `{cambiados, sinCambio}`. En `GET /seats/itineraries/**` el asiento
+aparece como `BLOQUEADO` para todos, pero `motivoBloqueo` solo viene para el operador de la empresa y el ADMIN.
 
-**Publica:** `SeatHeld`, `SeatReleased`, `SeatSold`, `HoldExpired`, `SeatStateChanged`.
-**Consume:** `ItineraryPublished` (crea los asientos), `ItineraryCancelled`, `PaymentFailed`, `OfferClosed`.
+## API interna (`X-Internal-Token`)
+
+| Método | Endpoint | Lo usa | Doc |
+|---|---|---|---|
+| POST | `/internal/holds` | flash-offers | HoldSeats para otro servicio |
+| GET | `/internal/holds/{id}` | booking | retención |
+| POST | `/internal/holds/{id}/confirm` `{bookingId}` | booking | ConfirmSale (idempotente por `bookingId`) |
+| POST | `/internal/holds/{id}/release` `{motivo}` | booking | ReleaseHold |
+| POST | `/internal/offers/{offerId}/seats` | flash-offers | pasa asientos a `EN_OFERTA` |
+| POST | `/internal/offers/{offerId}/release` | flash-offers | los devuelve a la venta |
+| POST | `/internal/sales/void` `{itineraryId, bookingId, seatNumbers, motivo}` | booking | **US-151** anular |
+| POST | `/internal/sales/swap` `{itineraryId, bookingId, fromSeat, toSeat}` | booking | **US-139** cambiar de asiento |
+| POST | `/internal/itineraries/{id}/remap` `{seatNumbers, capacidad}` | catalog | **US-119** cambiar el bus |
+
+**Anular (US-151).** `motivo`: `REPROGRAMACION`, `CANCELACION_EMPRESA`, `REEMBOLSO` o `CAMBIO_BUS`. Cada
+asiento pasa de `VENDIDO` a `DISPONIBLE` y se limpian `user_id`, `hold_id`, `vendido_en` (y `offer_id`); el
+asiento sale de la retención. Solo se anulan asientos vendidos a ese `bookingId` (vía `holds.booking_id`): si
+alguno es de otro dueño, 409 `SEAT_NOT_OWNED` y no se anula ninguno. Es idempotente: repetirla responde 200
+con el estado actual (`anulados` vacío). Auditoría con origen `VOID_<motivo>` (guarda la retención de la que
+salió el asiento) y eventos `SeatStateChanged` y `SeatReleased` (con `bookingId` y `motivo`).
+
+**Cambiar de asiento (US-139).** En una sola transacción `toSeat` pasa de `DISPONIBLE` a `VENDIDO` con el
+mismo comprador, la misma retención y la misma fecha de venta, y `fromSeat` vuelve a `DISPONIBLE`: la reserva
+nunca queda con cero asientos ni con dos. Locks de Redis y `FOR UPDATE` sobre los dos asientos en orden
+ascendente. `toSeat` no disponible → 409 `SEAT_UNAVAILABLE`; `fromSeat` no es de esa reserva → 409
+`SEAT_NOT_OWNED`; mismo asiento → 400 `SAME_SEAT`. Repetir un cambio ya hecho responde el estado actual.
+Auditoría con origen `SWAP` en los dos asientos, `SeatStateChanged` de ambos y `SeatReleased` de `fromSeat`
+(`motivo: CAMBIO_DE_ASIENTO`).
+
+**Cambiar el bus (US-119).** Aplica la lista de asientos del bus nuevo: agrega como `DISPONIBLE` los que no
+existían (auditoría `REMAP` + `SeatStateChanged`), borra los `DISPONIBLE` que ya no existen y actualiza la
+capacidad. Responde `{capacidad, agregados, eliminados}`. Si algún asiento `VENDIDO`, `RETENIDO`, `EN_OFERTA`
+o `BLOQUEADO` no existe en el bus nuevo no cambia nada y responde 409 `SEATS_CONFLICT` con
+`details.asientos` (catalog se la muestra al operador para que primero los reubique). `capacidad` menor que
+el número de asientos → 400 `INVALID_CAPACITY`.
+
+Errores con el formato de siempre: `{"error": {"code", "message", "details"}}`.
+
+## Eventos
+
+**Publica** (siempre por el outbox, en la misma transacción del cambio):
+
+| Evento | Cuándo |
+|---|---|
+| `SeatHeld` | retención creada o extendida |
+| `SeatReleased` | asientos liberados: retención liberada/expirada/cancelada, anulación (US-151, con `bookingId` y `motivo`) o `fromSeat` de un cambio (US-139) |
+| `SeatSold` | ConfirmSale |
+| `HoldExpired` | retención vencida por el barrido |
+| `SeatStateChanged` | cada cambio de estado de cada asiento (incluye `BLOQUEADO` y los asientos nuevos de un cambio de bus) |
+
+**Consume:**
+
+| Evento | Qué hace |
+|---|---|
+| `ItineraryPublished` `{itineraryId, seatNumbers, fechaSalida, companyId}` | crea los asientos y guarda `company_id` (completa empresa y fecha si el itinerario ya existía sin ellas) |
+| `ItineraryCancelled` | cancela retenciones activas y libera sus asientos |
+| `ItineraryRescheduled` `{itineraryId, fechaSalida}` | actualiza `fecha_salida` (un itinerario desconocido se ignora) |
+| `PaymentFailed` | libera la retención |
+| `OfferClosed` | los asientos de la oferta vuelven a la venta normal |
 
 `ReleaseExpiredHolds` corre cada 5 s en un solo nodo (lock de tarea en Redis).
 
@@ -189,6 +268,10 @@ mvn -B verify      # unitarias + integración con PostgreSQL y Redis reales (Tes
 - `SeatConcurrencyIT`: levanta PostgreSQL 16 y Redis 7 con Testcontainers, corre las migraciones Flyway
   reales (incluido el trigger contra la doble venta) y prueba US-080, confirmaciones concurrentes,
   extensión y expiración de retenciones y asientos en oferta.
+- `OutboxResilienceIT`: el outbox con Redis caído (eventos que no se pierden y salen en orden).
+- `SeatLifecycleIT`: anular (US-151), cambiar de asiento (US-139, incluida la prueba de concurrencia: 100
+  reservas distintas intentan pasarse al mismo asiento libre y exactamente una lo logra), bloquear (US-112,
+  permisos por empresa, trigger y restricciones de V4) y cambiar el bus (US-119), con PostgreSQL y Redis reales.
 
 Toda la plataforma: ver el README de **API-gateway**.
 
@@ -206,16 +289,15 @@ Toda la plataforma: ver el README de **API-gateway**.
 `mvn verify` falla si la cobertura total baja de los mínimos del `pom.xml`, en **todas** las ramas
 (también en `main`, donde Sonar no corre):
 
-| Métrica | Medido (2026-10-09) | Mínimo |
+| Métrica | Medido (2026-10-24) | Mínimo |
 |---|---|---|
-| Líneas | 63,9 % | `jacoco.minimo.lineas` = 0.60 |
-| Ramas | 47,2 % | `jacoco.minimo.ramas` = 0.45 |
+| Líneas | 86,6 % | `jacoco.minimo.lineas` = 0.85 |
+| Ramas | 73,5 % | `jacoco.minimo.ramas` = 0.70 |
 
 **La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.** Corre `mvn verify`, mira
 el total en `target/site/jacoco/index.html` (o la tabla del CI), redondéalo hacia abajo al 5 % y
-actualiza la propiedad en el pom en el mismo PR. Ramas está por debajo del 60 % de referencia:
-las mejores candidatas para subirla son `SeatInventoryService` (63 ramas sin cubrir), `EventConsumer`,
-`CurrentUser`, `InventoryEventsHandler` y los controladores `SeatController` / `InternalController`.
+actualiza la propiedad en el pom en el mismo PR. Las mejores candidatas para subir ramas son
+`SeatInventoryService` y `EventConsumer`.
 
 Fuera de la cobertura (mismas en `sonar.coverage.exclusions` y en los `<excludes>` de JaCoCo) solo
 está lo que no tiene lógica: `SeatInventoryApplication`, los records sin métodos de `web/dto`, las
@@ -229,7 +311,9 @@ arreglo en Spring Boot 3.x** (hoy CVE-2026-47884 y CVE-2026-47890 de `spring-web
 corrigen en Spring Framework 7); cada una explica en `statement` por qué no aplica a este servicio.
 Todas **vencen el 2027-01-31** (`expired_at`): desde esa fecha Trivy vuelve a fallar si no se migró a
 Spring Boot 4.1. Lo que sí tiene parche nunca se agrega aquí: se corrige subiendo la versión
-(ver las propiedades `*.version` de parches de seguridad en `pom.xml`).
+(ver las propiedades `*.version` de parches de seguridad en `pom.xml`). Los paquetes del sistema
+(Alpine) se parchean con `apk upgrade` en la etapa `runtime` del `Dockerfile`; el CI reconstruye esa
+etapa sin caché y con la imagen base recién descargada, así Trivy siempre ve los últimos parches.
 
 El análisis de Sonar solo corre en `develop` (push y PR con base `develop`, ver
 [Flujo de ramas y entornos](#flujo-de-ramas-y-entornos)) y si el repo tiene el secreto `SONAR_TOKEN`;
