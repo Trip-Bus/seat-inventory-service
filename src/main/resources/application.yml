@@ -89,3 +89,5 @@ tripbus:
     outbox-relay-ms: ${OUTBOX_RELAY_MS:500}
     outbox-retention: 7d
     outbox-purge-cron: "0 30 3 * * *"
+    # US-140: barrido de la lista de espera (cierre 30 min antes de la salida y filas sin procesar).
+    waitlist-interval-ms: ${WAITLIST_INTERVAL_MS:30000}

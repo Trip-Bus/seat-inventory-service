@@ -9,10 +9,12 @@ import com.tripbus.seatinventory.domain.HoldStatus;
 import com.tripbus.seatinventory.domain.KnownItinerary;
 import com.tripbus.seatinventory.domain.SeatState;
 import com.tripbus.seatinventory.domain.SeatStatus;
+import com.tripbus.seatinventory.domain.WaitlistStatus;
 import com.tripbus.seatinventory.events.InventoryEvents;
 import com.tripbus.seatinventory.repository.HoldRepository;
 import com.tripbus.seatinventory.repository.KnownItineraryRepository;
 import com.tripbus.seatinventory.repository.SeatStateRepository;
+import com.tripbus.seatinventory.repository.WaitlistRepository;
 import com.tripbus.seatinventory.web.dto.AvailabilityResponse;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
 import com.tripbus.seatinventory.web.dto.OfferSeatsResponse;
@@ -53,6 +55,7 @@ public class SeatInventoryService {
     private final SeatStateRepository seatRepository;
     private final HoldRepository holdRepository;
     private final KnownItineraryRepository itineraryRepository;
+    private final WaitlistRepository waitlistRepository;
     private final SeatAuditor auditor;
     private final InventoryInitializer initializer;
     private final CatalogClient catalogClient;
@@ -66,6 +69,7 @@ public class SeatInventoryService {
             SeatStateRepository seatRepository,
             HoldRepository holdRepository,
             KnownItineraryRepository itineraryRepository,
+            WaitlistRepository waitlistRepository,
             SeatAuditor auditor,
             InventoryInitializer initializer,
             CatalogClient catalogClient,
@@ -77,6 +81,7 @@ public class SeatInventoryService {
         this.seatRepository = seatRepository;
         this.holdRepository = holdRepository;
         this.itineraryRepository = itineraryRepository;
+        this.waitlistRepository = waitlistRepository;
         this.auditor = auditor;
         this.initializer = initializer;
         this.catalogClient = catalogClient;
@@ -242,7 +247,7 @@ public class SeatInventoryService {
             throw ApiException.conflict("HOLD_ALREADY_CONFIRMED", "La compra de este asiento ya fue confirmada");
         }
         if (hold.getEstado() == HoldStatus.ACTIVA) {
-            closeHold(hold, HoldStatus.LIBERADA, motivo != null ? motivo : "LIBERADA_POR_USUARIO");
+            closeHold(hold, HoldStatus.LIBERADA, motivo != null ? motivo : Hold.LIBERADA_POR_USUARIO);
         }
         return toResponse(hold);
     }
@@ -259,7 +264,9 @@ public class SeatInventoryService {
                 liberados.add(seat.getSeatNumber());
             }
         }
-        hold.cerrar(estadoFinal);
+        hold.cerrar(estadoFinal, motivo);
+        // US-140: si la retención era la oferta de un turno de la lista de espera, el turno se cierra con ella.
+        waitlistRepository.cerrarOfrecido(hold.getId(), WaitlistStatus.trasRetencion(estadoFinal), now);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("itineraryId", hold.getItineraryId());
@@ -336,6 +343,7 @@ public class SeatInventoryService {
             audit(seat, anterior, "SALE", now);
         }
         hold.confirmar(bookingId);
+        waitlistRepository.cerrarOfrecido(holdId, WaitlistStatus.CONVERTIDO, now);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("itineraryId", hold.getItineraryId());

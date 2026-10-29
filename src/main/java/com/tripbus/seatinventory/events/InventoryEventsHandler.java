@@ -6,6 +6,7 @@ import com.tripbus.seatinventory.common.events.DomainEventHandler;
 import com.tripbus.seatinventory.common.events.EventEnvelope;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
+import com.tripbus.seatinventory.service.WaitlistProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -29,10 +30,13 @@ public class InventoryEventsHandler implements DomainEventHandler {
 
     private final SeatInventoryService inventoryService;
     private final SeatLifecycleService lifecycleService;
+    private final WaitlistProcessor waitlistProcessor;
 
-    public InventoryEventsHandler(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
+    public InventoryEventsHandler(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService,
+                                  WaitlistProcessor waitlistProcessor) {
         this.inventoryService = inventoryService;
         this.lifecycleService = lifecycleService;
+        this.waitlistProcessor = waitlistProcessor;
     }
 
     @Override
@@ -54,8 +58,12 @@ public class InventoryEventsHandler implements DomainEventHandler {
                             companyId);
                 }
             }
-            case InventoryEvents.ITINERARY_CANCELLED ->
-                    inventoryService.onItineraryCancelled(uuid(p, ITINERARY_ID), p.path("motivo").asText(""));
+            case InventoryEvents.ITINERARY_CANCELLED -> {
+                UUID itineraryId = uuid(p, ITINERARY_ID);
+                // US-140: primero se cierra la fila (WaitlistClosed lleva también a quien ya tenía una oferta).
+                waitlistProcessor.onItineraryCancelled(itineraryId);
+                inventoryService.onItineraryCancelled(itineraryId, p.path("motivo").asText(""));
+            }
             case InventoryEvents.PAYMENT_FAILED -> {
                 if (p.hasNonNull("holdId")) {
                     try {

@@ -67,4 +67,8 @@ public interface SeatStateRepository extends JpaRepository<SeatState, UUID> {
     List<AvailabilityRow> countByEstado(@Param("itineraryIds") Collection<UUID> itineraryIds);
 
     long countByItineraryIdAndEstado(UUID itineraryId, SeatStatus estado);
+
+    /** US-140: números de los asientos en un estado (sin cargar las entidades). */
+    @Query("select s.seatNumber from SeatState s where s.itineraryId = :itineraryId and s.estado = :estado")
+    List<String> findSeatNumbers(@Param("itineraryId") UUID itineraryId, @Param("estado") SeatStatus estado);
 }

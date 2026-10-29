@@ -5,6 +5,7 @@ import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.common.events.EventEnvelope;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
+import com.tripbus.seatinventory.service.WaitlistProcessor;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -27,7 +28,8 @@ class InventoryEventsHandlerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SeatInventoryService inventory = mock(SeatInventoryService.class);
     private final SeatLifecycleService lifecycle = mock(SeatLifecycleService.class);
-    private final InventoryEventsHandler handler = new InventoryEventsHandler(inventory, lifecycle);
+    private final WaitlistProcessor waitlist = mock(WaitlistProcessor.class);
+    private final InventoryEventsHandler handler = new InventoryEventsHandler(inventory, lifecycle, waitlist);
     private final UUID itineraryId = UUID.randomUUID();
 
     @Test
@@ -51,7 +53,7 @@ class InventoryEventsHandlerTest {
         verify(inventory).onItineraryPublished(eq(itineraryId), eq(List.of("1")), isNull(), isNull());
 
         SeatInventoryService otro = mock(SeatInventoryService.class);
-        new InventoryEventsHandler(otro, lifecycle).handle(envelope("ItineraryPublished",
+        new InventoryEventsHandler(otro, lifecycle, waitlist).handle(envelope("ItineraryPublished",
                 Map.of("itineraryId", itineraryId)));
         verifyNoInteractions(otro);
     }
@@ -62,7 +64,7 @@ class InventoryEventsHandlerTest {
         verify(lifecycle).onItineraryRescheduled(itineraryId, Instant.parse("2026-12-03T08:30:00Z"));
 
         SeatLifecycleService otro = mock(SeatLifecycleService.class);
-        new InventoryEventsHandler(inventory, otro).handle(envelope("ItineraryRescheduled",
+        new InventoryEventsHandler(inventory, otro, waitlist).handle(envelope("ItineraryRescheduled",
                 Map.of("itineraryId", itineraryId)));
         verifyNoInteractions(otro);
     }
@@ -77,6 +79,7 @@ class InventoryEventsHandlerTest {
         handle("OfferClosed", Map.of("offerId", offerId));
         handle("OtroEvento", Map.of());
 
+        verify(waitlist).onItineraryCancelled(itineraryId);
         verify(inventory).onItineraryCancelled(itineraryId, "LLUVIA");
         verify(inventory).releaseHold(holdId, null, "PAGO_RECHAZADO");
         verify(inventory).releaseOfferSeats(offerId);
