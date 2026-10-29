@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,4 +35,25 @@ public interface HoldRepository extends JpaRepository<Hold, UUID> {
     @Query("select h.id from Hold h where h.itineraryId = :itineraryId and h.estado = :estado")
     List<UUID> findIdsByItineraryIdAndEstado(@Param("itineraryId") UUID itineraryId,
                                              @Param("estado") HoldStatus estado);
+
+    interface HoldCountRow {
+        UUID getItineraryId();
+
+        HoldStatus getEstado();
+
+        long getTotal();
+
+        long getPorUsuario();
+    }
+
+    /** US-191: retenciones por viaje y estado; porUsuario cuenta las que el pasajero liberó él mismo. */
+    @Query("""
+            select h.itineraryId as itineraryId, h.estado as estado, count(h) as total,
+                   sum(case when h.motivoCierre = :porUsuario then 1 else 0 end) as porUsuario
+            from Hold h
+            where h.itineraryId in :itineraryIds
+            group by h.itineraryId, h.estado
+            """)
+    List<HoldCountRow> countByEstado(@Param("itineraryIds") Collection<UUID> itineraryIds,
+                                     @Param("porUsuario") String porUsuario);
 }

@@ -7,6 +7,7 @@ import com.tripbus.seatinventory.domain.SeatState;
 import com.tripbus.seatinventory.domain.SeatStatus;
 import com.tripbus.seatinventory.events.InventoryEvents;
 import com.tripbus.seatinventory.repository.SeatAuditLogRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -19,17 +20,20 @@ import java.util.UUID;
 
 /**
  * Registra cada cambio de estado de un asiento en seat_audit_log y lo anuncia (SeatStateChanged) vía
- * outbox, en la misma transacción del cambio. Requiere transacción (el outbox es MANDATORY).
+ * outbox, en la misma transacción del cambio. Requiere transacción (el outbox es MANDATORY). Cuando un asiento
+ * vuelve a DISPONIBLE publica {@link AsientoLiberado} (US-140).
  */
 @Component
 public class SeatAuditor {
 
     private final SeatAuditLogRepository auditRepository;
     private final Outbox outbox;
+    private final ApplicationEventPublisher events;
 
-    public SeatAuditor(SeatAuditLogRepository auditRepository, Outbox outbox) {
+    public SeatAuditor(SeatAuditLogRepository auditRepository, Outbox outbox, ApplicationEventPublisher events) {
         this.auditRepository = auditRepository;
         this.outbox = outbox;
+        this.events = events;
     }
 
     /** Audita con el usuario y la retención que el asiento tiene después del cambio. */
@@ -52,6 +56,10 @@ public class SeatAuditor {
         payload.put("estadoNuevo", seat.getEstado().name());
         payload.put("offerId", seat.getOfferId());
         outbox.add(InventoryEvents.SEAT_STATE_CHANGED, payload);
+        if (seat.getEstado() == SeatStatus.DISPONIBLE && anterior != SeatStatus.DISPONIBLE) {
+            // US-140: un asiento volvió a la venta; la lista de espera del viaje se procesa tras el commit.
+            events.publishEvent(new AsientoLiberado(seat.getItineraryId()));
+        }
     }
 
     /**

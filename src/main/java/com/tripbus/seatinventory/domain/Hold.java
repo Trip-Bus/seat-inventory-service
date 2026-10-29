@@ -23,6 +23,10 @@ import java.util.UUID;
 @Table(name = "holds")
 public class Hold {
 
+    /** Motivo con el que el pasajero libera su propia retención (US-191: cuenta como abandono). */
+    public static final String LIBERADA_POR_USUARIO = "LIBERADA_POR_USUARIO";
+    private static final int MAX_MOTIVO = 200;
+
     @Id
     private UUID id;
 
@@ -56,6 +60,10 @@ public class Hold {
     @Column(nullable = false)
     private HoldStatus estado;
 
+    /** US-191: por qué se cerró (LIBERADA_POR_USUARIO, PAGO_RECHAZADO, EXPIRADA, ...). NULL mientras está activa. */
+    @Column(name = "motivo_cierre")
+    private String motivoCierre;
+
     @Version
     private long version;
 
@@ -87,8 +95,9 @@ public class Hold {
         this.bookingId = bookingId;
     }
 
-    public void cerrar(HoldStatus estadoFinal) {
+    public void cerrar(HoldStatus estadoFinal, String motivo) {
         this.estado = estadoFinal;
+        this.motivoCierre = motivo != null && motivo.length() > MAX_MOTIVO ? motivo.substring(0, MAX_MOTIVO) : motivo;
     }
 
     /** US-151: el asiento anulado deja de ser parte de la compra (la auditoría conserva que lo fue). */
@@ -140,5 +149,9 @@ public class Hold {
 
     public HoldStatus getEstado() {
         return estado;
+    }
+
+    public String getMotivoCierre() {
+        return motivoCierre;
     }
 }

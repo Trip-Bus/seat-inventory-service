@@ -34,10 +34,10 @@
 
         <!-- Mínimos de cobertura total que exige jacoco:check (ver jacoco-maven-plugin).
              La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.
-             Fijados con la medición del 2026-10-24 (Sprint 3, US-151/US-139/US-112) redondeada hacia abajo
-             al 5 %: líneas 86,6 % -> 0.85; ramas 73,5 % -> 0.70. -->
+             Fijados con la medición del 2026-10-28 (Sprint 4, US-191/US-140) redondeada hacia abajo
+             al 5 %: líneas 89,4 % -> 0.85; ramas 78,1 % -> 0.75. -->
         <jacoco.minimo.lineas>0.85</jacoco.minimo.lineas>
-        <jacoco.minimo.ramas>0.70</jacoco.minimo.ramas>
+        <jacoco.minimo.ramas>0.75</jacoco.minimo.ramas>
 
         <!-- SonarQube Cloud: el análisis lo lanza el CI solo en develop (push y PR con base develop)
              cuando existe el secreto SONAR_TOKEN. El plan Free analiza una única rama. -->
@@ -62,6 +62,7 @@
             **/web/dto/HoldRequest.java,
             **/web/dto/HoldResponse.java,
             **/web/dto/InternalHoldRequest.java,
+            **/web/dto/OccupancyResponse.java,
             **/web/dto/OfferSeatsRequest.java,
             **/web/dto/OfferSeatsResponse.java,
             **/web/dto/ReleaseRequest.java,
@@ -74,6 +75,8 @@
             **/web/dto/UnblockSeatsRequest.java,
             **/web/dto/VoidSaleRequest.java,
             **/web/dto/VoidSaleResponse.java,
+            **/web/dto/WaitlistRequest.java,
+            **/web/dto/WaitlistResponse.java,
             **/domain/SeatAuditLog.java,
             **/common/events/ProcessedEvent.java,
             **/config/OpenApiConfig.java
@@ -248,6 +251,7 @@
                         <exclude>**/web/dto/HoldRequest.class</exclude>
                         <exclude>**/web/dto/HoldResponse.class</exclude>
                         <exclude>**/web/dto/InternalHoldRequest.class</exclude>
+                        <exclude>**/web/dto/OccupancyResponse*.class</exclude>
                         <exclude>**/web/dto/OfferSeatsRequest.class</exclude>
                         <exclude>**/web/dto/OfferSeatsResponse.class</exclude>
                         <exclude>**/web/dto/ReleaseRequest.class</exclude>
@@ -260,6 +264,8 @@
                         <exclude>**/web/dto/UnblockSeatsRequest.class</exclude>
                         <exclude>**/web/dto/VoidSaleRequest.class</exclude>
                         <exclude>**/web/dto/VoidSaleResponse.class</exclude>
+                        <exclude>**/web/dto/WaitlistRequest.class</exclude>
+                        <exclude>**/web/dto/WaitlistResponse.class</exclude>
                         <exclude>**/domain/SeatAuditLog.class</exclude>
                         <exclude>**/common/events/ProcessedEvent.class</exclude>
                         <exclude>**/config/OpenApiConfig.class</exclude>

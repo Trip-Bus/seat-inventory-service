@@ -1,17 +1,23 @@
 package com.tripbus.seatinventory.web;
 
 import com.tripbus.seatinventory.common.security.CurrentUser;
+import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.service.Actor;
+import com.tripbus.seatinventory.service.OccupancyService;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
+import com.tripbus.seatinventory.service.WaitlistService;
 import com.tripbus.seatinventory.web.dto.AvailabilityResponse;
 import com.tripbus.seatinventory.web.dto.BlockSeatsRequest;
 import com.tripbus.seatinventory.web.dto.BlockSeatsResponse;
 import com.tripbus.seatinventory.web.dto.HoldRequest;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
+import com.tripbus.seatinventory.web.dto.OccupancyResponse;
 import com.tripbus.seatinventory.web.dto.SeatStatesResponse;
 import com.tripbus.seatinventory.web.dto.SeatView;
 import com.tripbus.seatinventory.web.dto.UnblockSeatsRequest;
+import com.tripbus.seatinventory.web.dto.WaitlistRequest;
+import com.tripbus.seatinventory.web.dto.WaitlistResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,10 +42,15 @@ public class SeatController {
 
     private final SeatInventoryService inventoryService;
     private final SeatLifecycleService lifecycleService;
+    private final OccupancyService occupancyService;
+    private final WaitlistService waitlistService;
 
-    public SeatController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
+    public SeatController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService,
+                          OccupancyService occupancyService, WaitlistService waitlistService) {
         this.inventoryService = inventoryService;
         this.lifecycleService = lifecycleService;
+        this.occupancyService = occupancyService;
+        this.waitlistService = waitlistService;
     }
 
     /** GetSeatStates: estado de todos los asientos (US-016/US-017). */
@@ -83,7 +94,7 @@ public class SeatController {
     /** ReleaseHold por el propio pasajero. */
     @DeleteMapping("/holds/{holdId}")
     public ResponseEntity<Void> release(@PathVariable UUID holdId, Authentication authentication) {
-        inventoryService.releaseHold(holdId, CurrentUser.id(authentication), "LIBERADA_POR_USUARIO");
+        inventoryService.releaseHold(holdId, CurrentUser.id(authentication), Hold.LIBERADA_POR_USUARIO);
         return ResponseEntity.noContent().build();
     }
 
@@ -100,6 +111,35 @@ public class SeatController {
     public BlockSeatsResponse unblock(@PathVariable UUID itineraryId, @Valid @RequestBody UnblockSeatsRequest request,
                                       Authentication authentication) {
         return lifecycleService.unblockSeats(itineraryId, request.seatNumbers(), actor(authentication));
+    }
+
+    /** US-191: ocupación y abandono de compra (OPERADOR de la empresa del viaje o ADMIN; a otros, 404). */
+    @GetMapping("/itineraries/{itineraryId}/occupancy")
+    public OccupancyResponse occupancy(@PathVariable UUID itineraryId, Authentication authentication) {
+        return occupancyService.ocupacion(itineraryId, actor(authentication));
+    }
+
+    /** US-140: anotarse en la lista de espera de un viaje agotado. */
+    @PostMapping("/itineraries/{itineraryId}/waitlist")
+    public ResponseEntity<WaitlistResponse> joinWaitlist(@PathVariable UUID itineraryId,
+                                                         @Valid @RequestBody WaitlistRequest request,
+                                                         Authentication authentication) {
+        WaitlistResponse turno = waitlistService.anotarse(itineraryId, CurrentUser.id(authentication),
+                request.cantidad());
+        return ResponseEntity.status(HttpStatus.CREATED).body(turno);
+    }
+
+    /** US-140: salir de la lista de espera. */
+    @DeleteMapping("/itineraries/{itineraryId}/waitlist")
+    public ResponseEntity<Void> leaveWaitlist(@PathVariable UUID itineraryId, Authentication authentication) {
+        waitlistService.salir(itineraryId, CurrentUser.id(authentication));
+        return ResponseEntity.noContent().build();
+    }
+
+    /** US-140: mis turnos, con la posición en la fila de los que siguen esperando. */
+    @GetMapping("/waitlist/me")
+    public List<WaitlistResponse> myWaitlist(Authentication authentication) {
+        return waitlistService.misTurnos(CurrentUser.id(authentication));
     }
 
     private static Actor optionalActor(Authentication authentication) {

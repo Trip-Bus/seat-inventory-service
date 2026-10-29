@@ -1,10 +1,12 @@
 package com.tripbus.seatinventory.web;
 
+import com.tripbus.seatinventory.service.OccupancyService;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
 import com.tripbus.seatinventory.web.dto.ConfirmSaleRequest;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
 import com.tripbus.seatinventory.web.dto.InternalHoldRequest;
+import com.tripbus.seatinventory.web.dto.OccupancyResponse;
 import com.tripbus.seatinventory.web.dto.OfferSeatsRequest;
 import com.tripbus.seatinventory.web.dto.OfferSeatsResponse;
 import com.tripbus.seatinventory.web.dto.ReleaseRequest;
@@ -22,8 +24,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -36,10 +40,13 @@ public class InternalController {
 
     private final SeatInventoryService inventoryService;
     private final SeatLifecycleService lifecycleService;
+    private final OccupancyService occupancyService;
 
-    public InternalController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService) {
+    public InternalController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService,
+                              OccupancyService occupancyService) {
         this.inventoryService = inventoryService;
         this.lifecycleService = lifecycleService;
+        this.occupancyService = occupancyService;
     }
 
     @PostMapping("/holds")
@@ -93,5 +100,11 @@ public class InternalController {
     @PostMapping("/itineraries/{itineraryId}/remap")
     public RemapSeatsResponse remap(@PathVariable UUID itineraryId, @Valid @RequestBody RemapSeatsRequest request) {
         return lifecycleService.remapSeats(itineraryId, request.seatNumbers(), request.capacidad());
+    }
+
+    /** US-191: ocupación y abandono de compra de hasta 200 viajes (panel de catalog, reportes de booking). */
+    @GetMapping("/occupancy")
+    public List<OccupancyResponse> occupancy(@RequestParam List<UUID> itineraryIds) {
+        return occupancyService.ocupaciones(itineraryIds);
     }
 }

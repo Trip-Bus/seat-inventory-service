@@ -7,7 +7,7 @@ distribuidos y confirmación de venta. **Ningún asiento se vende dos veces.**
 
 **Stack:** Java 21 · Spring Boot 3.5.16 · PostgreSQL 16 · Redis 7
 
-**HU:** US-016, US-017, US-018, US-022, US-025, US-026, US-080, US-112, US-119 (soporte), US-139, US-151 · **Puerto:** 18003 · **BD:** `tripbus_inventory` (puerto QA 18103)
+**HU:** US-016, US-017, US-018, US-022, US-025, US-026, US-080, US-112, US-119 (soporte), US-139, US-140, US-151, US-191 · **Puerto:** 18003 · **BD:** `tripbus_inventory` (puerto QA 18103)
 
 ## Tres líneas de defensa contra la doble venta
 
@@ -46,8 +46,26 @@ Un asiento `BLOQUEADO` no se puede retener ni ofertar y no cuenta en `/seats/ava
 | DELETE | `/seats/holds/{id}` | ReleaseHold |
 | POST | `/seats/itineraries/{id}/blocks` `{seatNumbers, motivo}` | US-112: bloquea asientos `DISPONIBLE`; 409 `SEAT_UNAVAILABLE` (con `details.asientos`) si alguno está `RETENIDO`, `VENDIDO` o `EN_OFERTA` (entonces no bloquea ninguno) |
 | DELETE | `/seats/itineraries/{id}/blocks` `{seatNumbers}` | US-112: devuelve a la venta los `BLOQUEADO` |
+| GET | `/seats/itineraries/{id}/occupancy` | **US-191** ocupación y abandono de compra del viaje (`OPERADOR` de su empresa o `ADMIN`) |
+| POST | `/seats/itineraries/{id}/waitlist` `{cantidad}` | **US-140** anotarse en la lista de espera (1–6 asientos) — 201, o 409 `SEATS_AVAILABLE`/`WAITLIST_CLOSED`/`ALREADY_IN_WAITLIST`/`ITINERARY_CANCELLED` |
+| DELETE | `/seats/itineraries/{id}/waitlist` | **US-140** salir de la lista de espera — 204, o 404 `WAITLIST_NOT_FOUND` |
+| GET | `/seats/waitlist/me` | **US-140** mis turnos (los más recientes primero) con `posicion` en la fila |
 
-Los `GET` de `/seats/itineraries/**` y `/seats/availability` son públicos; el resto exige JWT de identity.
+Los `GET` de `/seats/itineraries/**` y `/seats/availability` son públicos, **salvo** `/seats/itineraries/{id}/occupancy`;
+el resto exige JWT de identity.
+
+**Ocupación (US-191).** Responde `{itineraryId, capacidad, disponibles, retenidos, vendidos, enOferta, bloqueados,
+porcentajeOcupacion, retenciones: {creadas, activas, confirmadas, expiradas, liberadas, liberadasPorUsuario,
+canceladas}, tasaAbandono}`. `porcentajeOcupacion` = `vendidos / capacidad` en % con dos decimales;
+`tasaAbandono` = `(expiradas + liberadasPorUsuario) / creadas`, de 0 a 1 con cuatro decimales (0 si no hay
+retenciones). No cuenta como abandono lo que liberó el sistema: retenciones `CANCELADA` (viaje cancelado) ni las
+liberadas por booking (pago rechazado, reembolso…). `liberadasPorUsuario` son las que el pasajero liberó él mismo
+(`DELETE /seats/holds/{id}` o saliendo de la lista de espera con una oferta): `holds.motivo_cierre =
+LIBERADA_POR_USUARIO` (columna nueva de V5; las retenciones anteriores quedan en `NULL` y no cuentan como
+abandono). Solo el `OPERADOR` con `companyId` = empresa del viaje o un `ADMIN`; a cualquier otro (otra empresa,
+pasajero) se le responde 404 `ITINERARY_NOT_FOUND`, como si el viaje no existiera. Las cifras salen de dos
+consultas agregadas (`seat_states` y `holds` agrupados por viaje y estado, con los índices
+`(itinerary_id, estado)` de V5), sin cargar filas en memoria.
 
 **Bloqueos (US-112):** solo el `OPERADOR` de la empresa del viaje (claim `companyId` = `itineraries.company_id`)
 o un `ADMIN`; cualquier otro recibe 403 `NOT_ITINERARY_MANAGER`. `company_id` se llena con el `companyId` de
@@ -68,6 +86,7 @@ aparece como `BLOQUEADO` para todos, pero `motivoBloqueo` solo viene para el ope
 | POST | `/internal/sales/void` `{itineraryId, bookingId, seatNumbers, motivo}` | booking | **US-151** anular |
 | POST | `/internal/sales/swap` `{itineraryId, bookingId, fromSeat, toSeat}` | booking | **US-139** cambiar de asiento |
 | POST | `/internal/itineraries/{id}/remap` `{seatNumbers, capacidad}` | catalog | **US-119** cambiar el bus |
+| GET | `/internal/occupancy?itineraryIds=a,b,…` | catalog (panel), booking (reportes) | **US-191** ocupación de hasta 200 viajes, mismos campos que la pública, en el orden pedido; los viajes desconocidos se omiten; más de 200 → 400 `TOO_MANY_ITINERARIES` |
 
 **Anular (US-151).** `motivo`: `REPROGRAMACION`, `CANCELACION_EMPRESA`, `REEMBOLSO` o `CAMBIO_BUS`. Cada
 asiento pasa de `VENDIDO` a `DISPONIBLE` y se limpian `user_id`, `hold_id`, `vendido_en` (y `offer_id`); el
@@ -93,6 +112,45 @@ el número de asientos → 400 `INVALID_CAPACITY`.
 
 Errores con el formato de siempre: `{"error": {"code", "message", "details"}}`.
 
+## Lista de espera (US-140)
+
+Tabla `waitlist` (V5): `id, itinerary_id, user_id, cantidad (1–6), estado, hold_id, creado_en, actualizado_en`,
+con **un único turno activo** (`ESPERANDO` u `OFRECIDO`) por `(itinerary_id, user_id)` (índice único parcial).
+
+| Estado | Significa | Pasa a |
+|---|---|---|
+| `ESPERANDO` | en la fila, en orden de llegada (`creado_en`, `id`) | `OFRECIDO`, `CANCELADO` |
+| `OFRECIDO` | se le creó una retención normal (`hold_id`) con los asientos | `CONVERTIDO` (la retención se vendió), `VENCIDO` (venció o se liberó sin pagar), `CANCELADO` (salió de la fila o se canceló el viaje) |
+| `CONVERTIDO`, `VENCIDO`, `CANCELADO` | turno cerrado (queda como historial) | — |
+
+**Reglas:**
+
+- **Anotarse** solo si hay **menos** asientos `DISPONIBLE` que la `cantidad` (si no, 409 `SEATS_AVAILABLE` con
+  `details.disponibles`: que los retenga directamente) y faltan **más de 30 min** para la salida (si no, 409
+  `WAITLIST_CLOSED`). Viaje cancelado → 409 `ITINERARY_CANCELLED`; ya en la fila → 409 `ALREADY_IN_WAITLIST`.
+- **Cuando un asiento vuelve a `DISPONIBLE`** (retención vencida o liberada, venta anulada, cambio de asiento,
+  asiento desbloqueado, agregado por un cambio de bus o devuelto por una oferta que cerró), después del commit y
+  en otro hilo se procesa la fila de ese viaje en orden de llegada: al **primero cuya cantidad cabe** en lo
+  disponible se le crea una retención normal (10 min, extensible una vez) a su nombre con los **primeros asientos
+  libres** (orden natural), por el mismo camino de `HoldSeats` (las tres líneas de defensa), y su turno pasa a
+  `OFRECIDO`. Se repite mientras alguien quepa.
+- Cada viaje se procesa **de a uno**: cada oferta corre en su transacción con `pg_advisory_xact_lock` del
+  itinerario, así dos liberaciones simultáneas nunca ofrecen el mismo asiento a dos personas. Si otro pasajero
+  toma un asiento libre entre la lectura y la retención, se reintenta (hasta 3 veces) con lo que quede libre.
+- Si la retención ofrecida **vence sin pagar** (o el pasajero la libera), el turno queda `VENCIDO` y los asientos
+  se ofrecen al siguiente; si **se vende** (ConfirmSale), queda `CONVERTIDO`. Se actualiza en la misma
+  transacción que cierra la retención.
+- **Salir** (`DELETE`) pasa el turno a `CANCELADO`; si ya tenía una oferta, libera esa retención (cuenta como
+  liberada por el usuario en US-191).
+- **Cierre:** 30 min antes de la salida los turnos `ESPERANDO` pasan a `CANCELADO` (los `OFRECIDO` conservan su
+  retención hasta que se pague o venza); al cancelarse el viaje (`ItineraryCancelled`) se cierran todos, también
+  los `OFRECIDO` (su retención se cancela). En ambos casos se publica `WaitlistClosed`.
+- Un barrido cada 30 s (`WAITLIST_INTERVAL_MS`, en un solo nodo con el lock de tareas) cierra las filas que ya
+  deben cerrarse y vuelve a procesar las filas con turnos esperando, por si alguna liberación no alcanzó a
+  procesarse.
+- `GET /seats/waitlist/me` da la `posicion` (desde 1) entre los turnos `ESPERANDO` del viaje; en los demás
+  estados viene `null`.
+
 ## Eventos
 
 **Publica** (siempre por el outbox, en la misma transacción del cambio):
@@ -104,13 +162,15 @@ Errores con el formato de siempre: `{"error": {"code", "message", "details"}}`.
 | `SeatSold` | ConfirmSale |
 | `HoldExpired` | retención vencida por el barrido |
 | `SeatStateChanged` | cada cambio de estado de cada asiento (incluye `BLOQUEADO` y los asientos nuevos de un cambio de bus) |
+| `WaitlistSeatOffered` `{userId, itineraryId, holdId, seatNumbers, expiraEn}` | US-140: se le ofrecieron asientos a un turno de la lista de espera (el Realtime Gateway lo lleva al aviso privado del pasajero) |
+| `WaitlistClosed` `{itineraryId, userIds}` | US-140: la fila se cerró 30 min antes de la salida o porque se canceló el viaje (`userIds`: los turnos que se cancelaron) |
 
 **Consume:**
 
 | Evento | Qué hace |
 |---|---|
 | `ItineraryPublished` `{itineraryId, seatNumbers, fechaSalida, companyId}` | crea los asientos y guarda `company_id` (completa empresa y fecha si el itinerario ya existía sin ellas) |
-| `ItineraryCancelled` | cancela retenciones activas y libera sus asientos |
+| `ItineraryCancelled` | cierra la lista de espera (`WaitlistClosed`), cancela retenciones activas y libera sus asientos |
 | `ItineraryRescheduled` `{itineraryId, fechaSalida}` | actualiza `fecha_salida` (un itinerario desconocido se ignora) |
 | `PaymentFailed` | libera la retención |
 | `OfferClosed` | los asientos de la oferta vuelven a la venta normal |
@@ -236,7 +296,7 @@ no arranca y dice cuáles faltan (`RequiredSecretsCheck`).
 
 Opcionales con valor por defecto: `SERVER_PORT` (18003), `DB_HOST` (localhost), `DB_PORT` (18103),
 `DB_NAME` (tripbus_inventory), `DB_USERNAME` (inventory), `DB_POOL_SIZE`, `REDIS_HOST` (localhost),
-`REDIS_PORT` (18100), `HOLD_TTL` (10m). `DB_HOST` reemplaza a la antigua `DB_URL`.
+`REDIS_PORT` (18100), `HOLD_TTL` (10m), `WAITLIST_INTERVAL_MS` (30000). `DB_HOST` reemplaza a la antigua `DB_URL`.
 
 ## Swagger
 
@@ -272,6 +332,10 @@ mvn -B verify      # unitarias + integración con PostgreSQL y Redis reales (Tes
 - `SeatLifecycleIT`: anular (US-151), cambiar de asiento (US-139, incluida la prueba de concurrencia: 100
   reservas distintas intentan pasarse al mismo asiento libre y exactamente una lo logra), bloquear (US-112,
   permisos por empresa, trigger y restricciones de V4) y cambiar el bus (US-119), con PostgreSQL y Redis reales.
+- `OccupancyWaitlistIT`: ocupación con todos los estados y la tasa de abandono, otra empresa (404), el interno con
+  varios viajes (US-191); y la lista de espera (US-140): anotarse con cupo (409), liberación que ofrece al
+  primero que cabe, vencimiento que pasa al siguiente, conversión, cierre antes de la salida y al cancelar, y
+  concurrencia (20 liberaciones simultáneas con 3 personas en la fila: nadie recibe el mismo asiento).
 
 Toda la plataforma: ver el README de **API-gateway**.
 
@@ -289,10 +353,10 @@ Toda la plataforma: ver el README de **API-gateway**.
 `mvn verify` falla si la cobertura total baja de los mínimos del `pom.xml`, en **todas** las ramas
 (también en `main`, donde Sonar no corre):
 
-| Métrica | Medido (2026-10-24) | Mínimo |
+| Métrica | Medido (2026-10-28) | Mínimo |
 |---|---|---|
-| Líneas | 86,6 % | `jacoco.minimo.lineas` = 0.85 |
-| Ramas | 73,5 % | `jacoco.minimo.ramas` = 0.70 |
+| Líneas | 89,4 % | `jacoco.minimo.lineas` = 0.85 |
+| Ramas | 78,1 % | `jacoco.minimo.ramas` = 0.75 |
 
 **La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.** Corre `mvn verify`, mira
 el total en `target/site/jacoco/index.html` (o la tabla del CI), redondéalo hacia abajo al 5 % y
