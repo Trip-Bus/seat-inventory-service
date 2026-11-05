@@ -1,5 +1,6 @@
 package com.tripbus.seatinventory.common.events;
 
+import com.tripbus.seatinventory.common.observability.TracePropagation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,9 +41,9 @@ public class EventPublisher {
 
     /**
      * Publica de inmediato un evento cuyo payload ya es JSON. Lanza excepción si Redis no está
-     * disponible (el relay lo reintenta).
+     * disponible (el relay lo reintenta). HT-10: con traceparent (si no es null) el consumidor sigue esa traza.
      */
-    public void publish(String eventId, String type, Instant occurredAt, String payloadJson) {
+    public void publish(String eventId, String type, Instant occurredAt, String payloadJson, String traceparent) {
         if (!properties.enabled()) {
             return;
         }
@@ -52,6 +53,9 @@ public class EventPublisher {
         fields.put("source", source);
         fields.put("occurredAt", occurredAt.toString());
         fields.put("payload", payloadJson);
+        if (traceparent != null) {
+            fields.put(TracePropagation.CAMPO, traceparent);
+        }
 
         MapRecord<String, String, String> record = StreamRecords.newRecord().in(properties.stream()).ofMap(fields);
         redis.opsForStream().add(record);

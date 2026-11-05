@@ -44,6 +44,10 @@ public class SeatState {
     @Column(name = "bloqueo_motivo")
     private String bloqueoMotivo;
 
+    /** US-141: categoría del asiento (ESTANDAR si catalog no la manda). */
+    @Column(nullable = false)
+    private String categoria = SeatSpec.ESTANDAR;
+
     @Version
     private long version;
 
@@ -60,6 +64,36 @@ public class SeatState {
         this.seatNumber = seatNumber;
         this.estado = SeatStatus.DISPONIBLE;
         this.actualizadoEn = now;
+    }
+
+    /** US-141: asiento nuevo con su categoría (null: ESTANDAR). */
+    public SeatState(UUID id, UUID itineraryId, SeatSpec spec, Instant now) {
+        this(id, itineraryId, spec.numero(), now);
+        this.categoria = spec.categoriaONueva();
+    }
+
+    /** US-141: catalog cambió la categoría (null: no vino, se conserva la que tiene). */
+    public void cambiarCategoria(String nuevaCategoria) {
+        if (nuevaCategoria != null) {
+            this.categoria = nuevaCategoria;
+        }
+    }
+
+    /** US-142: queda ocupado en parte del recorrido (DISPONIBLE o ya TRAMO pasa a TRAMO). */
+    public void ocuparTramo(Instant now) {
+        this.estado = SeatStatus.TRAMO;
+        this.actualizadoEn = now;
+    }
+
+    /** US-142: ya no le queda ninguna ocupación por tramo: vuelve a estar libre para el recorrido completo. */
+    public void liberarTramos(Instant now) {
+        this.estado = SeatStatus.DISPONIBLE;
+        this.actualizadoEn = now;
+    }
+
+    /** US-142: libre para un tramo (sin contar las ocupaciones, que se revisan aparte). */
+    public boolean admiteTramos() {
+        return estado == SeatStatus.DISPONIBLE || estado == SeatStatus.TRAMO;
     }
 
     /** ¿Lo compró la reserva que tiene alguna de estas retenciones? */
@@ -176,5 +210,9 @@ public class SeatState {
 
     public String getBloqueoMotivo() {
         return bloqueoMotivo;
+    }
+
+    public String getCategoria() {
+        return categoria;
     }
 }

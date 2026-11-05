@@ -2,6 +2,7 @@ package com.tripbus.seatinventory.web;
 
 import com.tripbus.seatinventory.common.security.CurrentUser;
 import com.tripbus.seatinventory.domain.Hold;
+import com.tripbus.seatinventory.domain.Tramo;
 import com.tripbus.seatinventory.service.Actor;
 import com.tripbus.seatinventory.service.OccupancyService;
 import com.tripbus.seatinventory.service.SeatInventoryService;
@@ -55,8 +56,12 @@ public class SeatController {
 
     /** GetSeatStates: estado de todos los asientos (US-016/US-017). */
     @GetMapping("/itineraries/{itineraryId}")
-    public SeatStatesResponse seatStates(@PathVariable UUID itineraryId, Authentication authentication) {
-        return inventoryService.getSeatStates(itineraryId, optionalActor(authentication));
+    public SeatStatesResponse seatStates(@PathVariable UUID itineraryId,
+                                         @RequestParam(required = false) Integer from,
+                                         @RequestParam(required = false) Integer to,
+                                         Authentication authentication) {
+        // US-142: con from y to, el estado de cada asiento en ese tramo.
+        return inventoryService.getSeatStates(itineraryId, optionalActor(authentication), Tramo.de(from, to));
     }
 
     /** GetSeatState: estado de un asiento. */
@@ -68,15 +73,17 @@ public class SeatController {
 
     /** Disponibilidad agregada (la usa Catalog en la búsqueda). */
     @GetMapping("/availability")
-    public List<AvailabilityResponse> availability(@RequestParam List<UUID> itineraryIds) {
-        return inventoryService.availability(itineraryIds);
+    public List<AvailabilityResponse> availability(@RequestParam List<UUID> itineraryIds,
+                                                   @RequestParam(required = false) Integer from,
+                                                   @RequestParam(required = false) Integer to) {
+        return inventoryService.availability(itineraryIds, Tramo.de(from, to));
     }
 
     /** HoldSeats: retiene asientos por 10 minutos (US-022). 409 si alguno está ocupado (US-018). */
     @PostMapping("/holds")
     public ResponseEntity<HoldResponse> hold(@Valid @RequestBody HoldRequest request, Authentication authentication) {
         HoldResponse hold = inventoryService.holdSeats(request.itineraryId(), request.seatNumbers(),
-                CurrentUser.id(authentication), null);
+                CurrentUser.id(authentication), null, Tramo.de(request.fromOrden(), request.toOrden()));
         return ResponseEntity.status(HttpStatus.CREATED).body(hold);
     }
 
@@ -125,7 +132,7 @@ public class SeatController {
                                                          @Valid @RequestBody WaitlistRequest request,
                                                          Authentication authentication) {
         WaitlistResponse turno = waitlistService.anotarse(itineraryId, CurrentUser.id(authentication),
-                request.cantidad());
+                request.cantidad(), Tramo.de(request.fromOrden(), request.toOrden()));
         return ResponseEntity.status(HttpStatus.CREATED).body(turno);
     }
 

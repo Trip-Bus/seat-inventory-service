@@ -56,4 +56,27 @@ public interface HoldRepository extends JpaRepository<Hold, UUID> {
             """)
     List<HoldCountRow> countByEstado(@Param("itineraryIds") Collection<UUID> itineraryIds,
                                      @Param("porUsuario") String porUsuario);
+
+    interface ArchivableHoldCountRow {
+        UUID getItineraryId();
+
+        String getEstado();
+
+        long getTotal();
+
+        long getPorUsuario();
+    }
+
+    /** US-191 + HT-08: lo mismo que {@link #countByEstado}, sumando las retenciones de los viajes archivados. */
+    @Query(value = """
+            select itinerary_id as itineraryId, estado, count(*) as total,
+                   count(*) filter (where motivo_cierre = :porUsuario) as porUsuario
+            from (
+                select itinerary_id, estado, motivo_cierre from holds where itinerary_id in (:itineraryIds)
+                union all
+                select itinerary_id, estado, motivo_cierre from holds_archive where itinerary_id in (:itineraryIds)
+            ) t group by itinerary_id, estado
+            """, nativeQuery = true)
+    List<ArchivableHoldCountRow> contarConArchivo(@Param("itineraryIds") Collection<UUID> itineraryIds,
+                                                  @Param("porUsuario") String porUsuario);
 }

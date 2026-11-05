@@ -55,8 +55,8 @@ class OccupancyAndWaitlistUnitTest {
     void unViajeSinAsientosNiRetencionesNoDivideEntreCero() {
         UUID id = UUID.randomUUID();
         when(itineraries.findAllById(anyCollection())).thenReturn(List.of(new KnownItinerary(id, 0, null, null)));
-        when(seats.countByEstado(anyCollection())).thenReturn(List.of());
-        when(holds.countByEstado(anyCollection(), any())).thenReturn(List.of());
+        when(seats.contarConArchivo(anyCollection())).thenReturn(List.of());
+        when(holds.contarConArchivo(anyCollection(), any())).thenReturn(List.of());
 
         OccupancyResponse r = occupancy.ocupaciones(List.of(id)).get(0);
         assertThat(r.porcentajeOcupacion()).isZero();

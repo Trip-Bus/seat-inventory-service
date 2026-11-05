@@ -12,6 +12,7 @@ import com.tripbus.seatinventory.web.dto.OccupancyResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -20,10 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * US-191: ocupación y abandono de compra por viaje. Las cifras salen de dos consultas agregadas (asientos y
- * retenciones agrupados por viaje y estado), sin cargar filas en memoria.
+ * retenciones agrupados por viaje y estado), sin cargar filas en memoria. HT-08: suman las tablas *_archive, así
+ * un viaje archivado sigue teniendo su ocupación.
  */
 @Service
 public class OccupancyService {
@@ -48,7 +51,7 @@ public class OccupancyService {
      */
     @Transactional(readOnly = true)
     public OccupancyResponse ocupacion(UUID itineraryId, Actor actor) {
-        KnownItinerary itinerary = itineraryRepository.findById(itineraryId)
+        KnownItinerary itinerary = buscar(List.of(itineraryId)).stream().findFirst()
                 .filter(it -> actor != null && actor.puedeGestionar(it))
                 .orElseThrow(() -> ApiException.notFound("ITINERARY_NOT_FOUND", "El itinerario no existe"));
         return calcular(List.of(itinerary)).get(0);
@@ -66,7 +69,7 @@ public class OccupancyService {
             return List.of();
         }
         Map<UUID, KnownItinerary> conocidos = new HashMap<>();
-        itineraryRepository.findAllById(ids).forEach(it -> conocidos.put(it.getId(), it));
+        buscar(ids).forEach(it -> conocidos.put(it.getId(), it));
         return calcular(ids.stream().filter(conocidos::containsKey).map(conocidos::get).toList());
     }
 
@@ -76,16 +79,18 @@ public class OccupancyService {
         }
         List<UUID> ids = itineraries.stream().map(KnownItinerary::getId).toList();
         Map<UUID, Map<SeatStatus, Long>> asientos = new HashMap<>();
-        for (SeatStateRepository.AvailabilityRow row : seatRepository.countByEstado(ids)) {
+        for (SeatStateRepository.OccupancyCountRow row : seatRepository.contarConArchivo(ids)) {
             asientos.computeIfAbsent(row.getItineraryId(), k -> new EnumMap<>(SeatStatus.class))
-                    .put(row.getEstado(), row.getTotal());
+                    .put(SeatStatus.valueOf(row.getEstado()), row.getTotal());
         }
         Map<UUID, Map<HoldStatus, Long>> retenciones = new HashMap<>();
         Map<UUID, Long> liberadasPorUsuario = new HashMap<>();
-        for (HoldRepository.HoldCountRow row : holdRepository.countByEstado(ids, Hold.LIBERADA_POR_USUARIO)) {
+        for (HoldRepository.ArchivableHoldCountRow row
+                : holdRepository.contarConArchivo(ids, Hold.LIBERADA_POR_USUARIO)) {
+            HoldStatus estado = HoldStatus.valueOf(row.getEstado());
             retenciones.computeIfAbsent(row.getItineraryId(), k -> new EnumMap<>(HoldStatus.class))
-                    .put(row.getEstado(), row.getTotal());
-            if (row.getEstado() == HoldStatus.LIBERADA) {
+                    .put(estado, row.getTotal());
+            if (estado == HoldStatus.LIBERADA) {
                 liberadasPorUsuario.put(row.getItineraryId(), row.getPorUsuario());
             }
         }
@@ -106,10 +111,21 @@ public class OccupancyService {
         return new OccupancyResponse(it.getId(), it.getCapacidad(),
                 asientos.getOrDefault(SeatStatus.DISPONIBLE, 0L), asientos.getOrDefault(SeatStatus.RETENIDO, 0L),
                 vendidos, asientos.getOrDefault(SeatStatus.EN_OFERTA, 0L),
-                asientos.getOrDefault(SeatStatus.BLOQUEADO, 0L),
+                asientos.getOrDefault(SeatStatus.BLOQUEADO, 0L), asientos.getOrDefault(SeatStatus.TRAMO, 0L),
                 redondear(it.getCapacidad() > 0 ? vendidos * 100.0 / it.getCapacidad() : 0, 2), r,
                 // Sin contar lo que liberó el sistema (itinerario cancelado, pago rechazado).
                 redondear(creadas > 0 ? (expiradas + porUsuario) / (double) creadas : 0, 4));
+    }
+
+    /** HT-08: los viajes vivos y, de los que no están, los archivados (los reportes abarcan hasta 366 días). */
+    private List<KnownItinerary> buscar(Collection<UUID> ids) {
+        List<KnownItinerary> encontrados = new ArrayList<>(itineraryRepository.findAllById(ids));
+        Set<UUID> vivos = encontrados.stream().map(KnownItinerary::getId).collect(Collectors.toSet());
+        List<UUID> faltan = ids.stream().filter(id -> !vivos.contains(id)).toList();
+        if (!faltan.isEmpty()) {
+            encontrados.addAll(itineraryRepository.findArchived(faltan));
+        }
+        return encontrados;
     }
 
     static double redondear(double valor, int decimales) {

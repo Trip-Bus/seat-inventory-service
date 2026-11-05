@@ -3,10 +3,11 @@ package com.tripbus.seatinventory.service;
 import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.domain.KnownItinerary;
+import com.tripbus.seatinventory.domain.SeatOccupancy;
+import com.tripbus.seatinventory.domain.SeatSpec;
 import com.tripbus.seatinventory.domain.SeatState;
 import com.tripbus.seatinventory.domain.SeatStatus;
 import com.tripbus.seatinventory.domain.VoidReason;
-import com.tripbus.seatinventory.repository.HoldRepository;
 import com.tripbus.seatinventory.repository.KnownItineraryRepository;
 import com.tripbus.seatinventory.repository.SeatStateRepository;
 import com.tripbus.seatinventory.web.dto.BlockSeatsResponse;
@@ -31,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -57,7 +59,7 @@ public class SeatLifecycleService {
     private static final String SEAT_UNAVAILABLE = "SEAT_UNAVAILABLE";
 
     private final SeatStateRepository seatRepository;
-    private final HoldRepository holdRepository;
+    private final SeatOccupancies occupancies;
     private final KnownItineraryRepository itineraryRepository;
     private final SeatAuditor auditor;
     private final DistributedSeatLock seatLock;
@@ -66,14 +68,14 @@ public class SeatLifecycleService {
 
     public SeatLifecycleService(
             SeatStateRepository seatRepository,
-            HoldRepository holdRepository,
+            SeatOccupancies occupancies,
             KnownItineraryRepository itineraryRepository,
             SeatAuditor auditor,
             DistributedSeatLock seatLock,
             TransactionTemplate tx,
             Clock clock) {
         this.seatRepository = seatRepository;
-        this.holdRepository = holdRepository;
+        this.occupancies = occupancies;
         this.itineraryRepository = itineraryRepository;
         this.auditor = auditor;
         this.seatLock = seatLock;
@@ -98,14 +100,16 @@ public class SeatLifecycleService {
 
     private VoidSaleResponse doVoid(UUID itineraryId, UUID bookingId, List<String> seats, VoidReason motivo) {
         Instant now = clock.instant();
-        Map<UUID, Hold> holds = lockHolds(itineraryId, bookingId);
+        Map<UUID, Hold> holds = occupancies.lockHolds(itineraryId, bookingId);
         List<SeatState> locked = lockExisting(itineraryId, seats);
 
-        List<SeatState> aAnular = new ArrayList<>();
+        // US-142: la venta de cada asiento es su ocupación VENDIDO (del recorrido completo o de un tramo).
+        Map<SeatState, SeatOccupancy> aAnular = new LinkedHashMap<>();
         List<String> ajenos = new ArrayList<>();
         for (SeatState seat : locked) {
-            if (seat.vendidoA(holds.keySet())) {
-                aAnular.add(seat);
+            Optional<SeatOccupancy> venta = occupancies.vendidaA(seat, holds.keySet());
+            if (venta.isPresent()) {
+                aAnular.put(seat, venta.get());
             } else if (!auditor.yaLiberadoPor(seat, holds.keySet(), "VOID%")) {
                 ajenos.add(seat.getSeatNumber());
             }
@@ -115,19 +119,26 @@ public class SeatLifecycleService {
         }
 
         Map<UUID, List<String>> anuladosPorHold = new LinkedHashMap<>();
-        for (SeatState seat : aAnular) {
-            UUID holdId = seat.getHoldId();
-            UUID userId = seat.getUserId();
-            seat.anular(now);
-            auditor.registrar(seat, SeatStatus.VENDIDO, motivo.origen(), now, userId, holdId);
+        aAnular.forEach((seat, venta) -> {
+            UUID holdId = venta.getHoldId();
+            SeatStatus anterior = seat.getEstado();
+            occupancies.quitar(venta);
+            if (anterior == SeatStatus.VENDIDO) {
+                seat.anular(now);
+            } else {
+                // Venta por tramo: el asiento vuelve a DISPONIBLE solo si no le quedan otras ocupaciones.
+                occupancies.liberarSiQuedoLibre(seat, now);
+            }
+            auditor.registrar(seat, anterior, motivo.origen(), now, venta.getUserId(), holdId);
             holds.get(holdId).quitarAsiento(seat.getSeatNumber());
             anuladosPorHold.computeIfAbsent(holdId, k -> new ArrayList<>()).add(seat.getSeatNumber());
-        }
+        });
         seatRepository.flush();
         anuladosPorHold.forEach((holdId, numeros) ->
                 auditor.anunciarLiberados(holds.get(holdId), numeros, bookingId, motivo.name()));
 
-        List<String> anulados = aAnular.stream().map(SeatState::getSeatNumber).sorted(SeatOrder.NATURAL).toList();
+        List<String> anulados = aAnular.keySet().stream().map(SeatState::getSeatNumber).sorted(SeatOrder.NATURAL)
+                .toList();
         return new VoidSaleResponse(itineraryId, bookingId, motivo.name(), anulados, views(locked));
     }
 
@@ -156,37 +167,52 @@ public class SeatLifecycleService {
             return Objects.requireNonNull(tx.execute(status -> doSwap(itineraryId, bookingId, from, to, seats)));
         } catch (DataIntegrityViolationException e) {
             // Solo ocurre si las dos primeras líneas fallaran: la BD tiene la última palabra.
+            occupancies.dobleVentaBloqueada();
             throw ApiException.conflict(SEAT_UNAVAILABLE, "El asiento " + to + " ya no está disponible");
         }
     }
 
     private SwapSeatResponse doSwap(UUID itineraryId, UUID bookingId, String from, String to, List<String> seats) {
-        Map<UUID, Hold> holds = lockHolds(itineraryId, bookingId);
+        Map<UUID, Hold> holds = occupancies.lockHolds(itineraryId, bookingId);
         Map<String, SeatState> locked = lockExisting(itineraryId, seats).stream()
                 .collect(Collectors.toMap(SeatState::getSeatNumber, Function.identity()));
         SeatState origen = locked.get(from);
         SeatState destino = locked.get(to);
 
-        if (!origen.vendidoA(holds.keySet())) {
-            if (destino.vendidoA(holds.keySet()) && auditor.yaLiberadoPor(origen, holds.keySet(), ORIGEN_SWAP)) {
+        Optional<SeatOccupancy> venta = occupancies.vendidaA(origen, holds.keySet());
+        if (venta.isEmpty()) {
+            Optional<SeatOccupancy> yaCambiada = occupancies.vendidaA(destino, holds.keySet());
+            if (yaCambiada.isPresent() && auditor.yaLiberadoPor(origen, holds.keySet(), ORIGEN_SWAP)) {
                 // El mismo cambio ya se hizo: se responde el estado actual.
-                return new SwapSeatResponse(itineraryId, bookingId, destino.getHoldId(), from, to,
+                return new SwapSeatResponse(itineraryId, bookingId, yaCambiada.get().getHoldId(), from, to,
                         views(List.of(origen, destino)));
             }
             throw notOwned(List.of(from));
         }
-        if (destino.getEstado() != SeatStatus.DISPONIBLE) {
+        Hold hold = holds.get(venta.get().getHoldId());
+        // US-142: el asiento nuevo tiene que estar libre en el tramo de la venta (todo el recorrido si es completa).
+        boolean libre = hold.esCompleta() ? destino.getEstado() == SeatStatus.DISPONIBLE
+                : destino.admiteTramos() && occupancies.cruzados(itineraryId, List.of(to), hold.getTramo()).isEmpty();
+        if (!libre) {
             throw new ApiException(HttpStatus.CONFLICT, SEAT_UNAVAILABLE,
                     "El asiento " + to + " no está disponible", Map.of(ASIENTOS, List.of(to)));
         }
 
         Instant now = clock.instant();
-        Hold hold = holds.get(origen.getHoldId());
-        UUID userId = origen.getUserId();
-        destino.venderEnCambioDe(origen, now);
-        origen.anular(now);
-        auditor.registrar(destino, SeatStatus.DISPONIBLE, ORIGEN_SWAP, now);
-        auditor.registrar(origen, SeatStatus.VENDIDO, ORIGEN_SWAP, now, userId, hold.getId());
+        UUID userId = venta.get().getUserId();
+        SeatStatus antesOrigen = origen.getEstado();
+        SeatStatus antesDestino = destino.getEstado();
+        if (hold.esCompleta()) {
+            destino.venderEnCambioDe(origen, now);
+            origen.anular(now);
+            occupancies.mover(venta.get(), to);
+        } else {
+            destino.ocuparTramo(now);
+            occupancies.mover(venta.get(), to);
+            occupancies.liberarSiQuedoLibre(origen, now);
+        }
+        auditor.registrar(destino, antesDestino, ORIGEN_SWAP, now, userId, hold.getId());
+        auditor.registrar(origen, antesOrigen, ORIGEN_SWAP, now, userId, hold.getId());
         hold.cambiarAsiento(from, to);
         seatRepository.flush();
         auditor.anunciarLiberados(hold, List.of(from), bookingId, "CAMBIO_DE_ASIENTO");
@@ -266,7 +292,19 @@ public class SeatLifecycleService {
      * para que catalog le pida al operador reubicarlos primero.
      */
     public RemapSeatsResponse remapSeats(UUID itineraryId, List<String> requested, int capacidad) {
-        List<String> nuevos = validSeats(requested);
+        return remapSeatsWithCategories(itineraryId,
+                requested == null ? List.of() : requested.stream().map(SeatSpec::sinCategoria).toList(), capacidad);
+    }
+
+    /**
+     * US-141: lo mismo con la categoría de cada asiento: los nuevos nacen con la suya (ESTANDAR si no viene) y los que
+     * siguen toman la nueva si viene. US-142: un asiento con ventas por tramo (TRAMO) está ocupado, así que si no
+     * existe en el bus nuevo también es conflicto.
+     */
+    public RemapSeatsResponse remapSeatsWithCategories(UUID itineraryId, List<SeatSpec> requested, int capacidad) {
+        Map<String, SeatSpec> specs = new LinkedHashMap<>();
+        requested.forEach(s -> specs.put(s.numero(), s));
+        List<String> nuevos = validSeats(new ArrayList<>(specs.keySet()));
         if (capacidad < nuevos.size()) {
             throw ApiException.badRequest("INVALID_CAPACITY",
                     "La capacidad (" + capacidad + ") no puede ser menor que el número de asientos (" + nuevos.size()
@@ -278,11 +316,12 @@ public class SeatLifecycleService {
                 seatRepository.findByItineraryId(itineraryId).stream().map(SeatState::getSeatNumber),
                 nuevos.stream()).toList());
         try (DistributedSeatLock.SeatLocks ignored = seatLock.acquireAll(itineraryId, todos)) {
-            return Objects.requireNonNull(tx.execute(status -> doRemap(itineraryId, nuevos, capacidad)));
+            return Objects.requireNonNull(tx.execute(status -> doRemap(itineraryId, nuevos, specs, capacidad)));
         }
     }
 
-    private RemapSeatsResponse doRemap(UUID itineraryId, List<String> nuevos, int capacidad) {
+    private RemapSeatsResponse doRemap(UUID itineraryId, List<String> nuevos, Map<String, SeatSpec> specs,
+                                       int capacidad) {
         Instant now = clock.instant();
         KnownItinerary itinerary = itineraryRepository.lockById(itineraryId)
                 .orElseThrow(() -> ApiException.notFound("ITINERARY_NOT_FOUND", "El itinerario no existe"));
@@ -302,9 +341,11 @@ public class SeatLifecycleService {
         Set<String> existentes = actuales.stream().map(SeatState::getSeatNumber).collect(Collectors.toSet());
         List<String> agregados = nuevos.stream().filter(n -> !existentes.contains(n)).toList();
         for (String numero : agregados) {
-            SeatState seat = seatRepository.save(new SeatState(UUID.randomUUID(), itineraryId, numero, now));
+            SeatState seat = seatRepository.save(new SeatState(UUID.randomUUID(), itineraryId, specs.get(numero), now));
             auditor.registrar(seat, null, ORIGEN_REMAP, now);
         }
+        actuales.stream().filter(s -> nuevosSet.contains(s.getSeatNumber()))
+                .forEach(s -> s.cambiarCategoria(specs.get(s.getSeatNumber()).categoria()));
         itinerary.cambiarCapacidad(capacidad);
         seatRepository.flush();
 
@@ -340,15 +381,6 @@ public class SeatLifecycleService {
             throw ApiException.forbidden("NOT_ITINERARY_MANAGER",
                     "Solo el operador de la empresa del viaje o un administrador puede bloquear sus asientos");
         }
-    }
-
-    /** Retenciones de la reserva en el viaje, bloqueadas ANTES que los asientos (mismo orden que ConfirmSale). */
-    private Map<UUID, Hold> lockHolds(UUID itineraryId, UUID bookingId) {
-        Map<UUID, Hold> holds = new LinkedHashMap<>();
-        for (Hold hold : holdRepository.lockByItineraryAndBooking(itineraryId, bookingId)) {
-            holds.put(hold.getId(), hold);
-        }
-        return holds;
     }
 
     /** SELECT ... FOR UPDATE de los asientos pedidos; 404 si alguno no existe en el bus. */

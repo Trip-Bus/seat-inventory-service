@@ -2,6 +2,7 @@ package com.tripbus.seatinventory.common.events;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tripbus.seatinventory.common.observability.TracePropagation;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -25,21 +26,26 @@ public class Outbox {
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final TracePropagation tracing;
     /** Último creado_en asignado: estrictamente creciente para respetar el orden de creación. */
     private final AtomicReference<Instant> ultimo = new AtomicReference<>(Instant.EPOCH);
 
-    public Outbox(JdbcTemplate jdbc, ObjectMapper objectMapper, Clock clock) {
+    public Outbox(JdbcTemplate jdbc, ObjectMapper objectMapper, Clock clock, TracePropagation tracing) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.tracing = tracing;
     }
 
     /** Devuelve el id del mensaje, que será el eventId del evento publicado. */
     @Transactional(propagation = Propagation.MANDATORY)
     public UUID add(String eventType, Object payload) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO outbox (id, event_type, payload, creado_en) VALUES (?, ?, ?::jsonb, ?)",
-                id, eventType, toJson(payload), Timestamp.from(siguienteInstante()));
+        // HT-10: con la traza en curso, para que el consumidor la siga.
+        jdbc.update("""
+                INSERT INTO outbox (id, event_type, payload, creado_en, trace_parent)
+                VALUES (?, ?, ?::jsonb, ?, ?)
+                """, id, eventType, toJson(payload), Timestamp.from(siguienteInstante()), tracing.actual());
         return id;
     }
 

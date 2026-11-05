@@ -4,6 +4,7 @@ import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.common.events.Outbox;
 import com.tripbus.seatinventory.domain.KnownItinerary;
 import com.tripbus.seatinventory.domain.SeatStatus;
+import com.tripbus.seatinventory.domain.Tramo;
 import com.tripbus.seatinventory.domain.WaitlistEntry;
 import com.tripbus.seatinventory.domain.WaitlistStatus;
 import com.tripbus.seatinventory.events.InventoryEvents;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,16 +99,18 @@ public class WaitlistProcessor {
             cerrar(itineraryId, List.of(WaitlistStatus.ESPERANDO));
             return false;
         }
-        List<String> libres = new ArrayList<>(seatRepository.findSeatNumbers(itineraryId, SeatStatus.DISPONIBLE));
+        // US-142: cada turno espera su tramo; lo libre se calcula una vez por tramo.
+        Map<Tramo, List<String>> libresPorTramo = new HashMap<>();
         Optional<WaitlistEntry> turno = waitlistRepository.lockFila(itineraryId, List.of(WaitlistStatus.ESPERANDO))
-                .stream().filter(w -> w.getCantidad() <= libres.size()).findFirst();
+                .stream().filter(w -> w.getCantidad() <= libresPorTramo
+                        .computeIfAbsent(w.getTramo(), t -> libres(itineraryId, t)).size()).findFirst();
         if (turno.isEmpty()) {
             return false;
         }
         WaitlistEntry entry = turno.get();
-        libres.sort(SeatOrder.NATURAL);
+        List<String> libres = libresPorTramo.get(entry.getTramo());
         HoldResponse hold = inventoryService.holdSeats(itineraryId, libres.subList(0, entry.getCantidad()),
-                entry.getUserId(), null);
+                entry.getUserId(), null, entry.getTramo());
         entry.ofrecer(hold.holdId(), now);
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -115,6 +119,10 @@ public class WaitlistProcessor {
         payload.put("holdId", hold.holdId());
         payload.put("seatNumbers", hold.seatNumbers());
         payload.put("expiraEn", hold.expiraEn());
+        if (!entry.getTramo().esCompleto()) {
+            payload.put("desdeOrden", entry.getTramo().desde());
+            payload.put("hastaOrden", entry.getTramo().hasta());
+        }
         outbox.add(InventoryEvents.WAITLIST_SEAT_OFFERED, payload);
         log.info("Lista de espera del viaje {}: {} asiento(s) ofrecidos al turno {}", itineraryId,
                 entry.getCantidad(), entry.getId());
@@ -144,6 +152,15 @@ public class WaitlistProcessor {
     /** Viajes con turnos ESPERANDO (el barrido periódico los vuelve a procesar por si algo se quedó sin oferta). */
     public List<UUID> viajesEnEspera() {
         return waitlistRepository.findItineraryIdsByEstado(WaitlistStatus.ESPERANDO);
+    }
+
+    /** Asientos libres en el tramo, en orden natural: los primeros son los que se ofrecen. */
+    List<String> libres(UUID itineraryId, Tramo tramo) {
+        List<String> libres = new ArrayList<>(tramo.esCompleto()
+                ? seatRepository.findSeatNumbers(itineraryId, SeatStatus.DISPONIBLE)
+                : seatRepository.libresEnTramo(itineraryId, tramo.desde(), tramo.hasta()));
+        libres.sort(SeatOrder.NATURAL);
+        return libres;
     }
 
     static boolean cerradaPorSalida(KnownItinerary itinerary, Instant now) {
