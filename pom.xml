@@ -28,16 +28,15 @@
         <postgresql.version>42.7.12</postgresql.version>
 
         <springdoc.version>2.8.17</springdoc.version>
-        <logstash-logback.version>8.0</logstash-logback.version>
         <jacoco.version>0.8.12</jacoco.version>
         <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
 
         <!-- Mínimos de cobertura total que exige jacoco:check (ver jacoco-maven-plugin).
              La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.
-             Fijados con la medición del 2026-10-28 (Sprint 4, US-191/US-140) redondeada hacia abajo
-             al 5 %: líneas 89,4 % -> 0.85; ramas 78,1 % -> 0.75. -->
-        <jacoco.minimo.lineas>0.85</jacoco.minimo.lineas>
-        <jacoco.minimo.ramas>0.75</jacoco.minimo.ramas>
+             Fijados con la medición del 2026-11-05 (Sprints 5 y 6, HT-10/US-141/US-142/HT-08) redondeada hacia abajo
+             al 5 %: líneas 94,8 % -> 0.90; ramas 83,6 % -> 0.80. -->
+        <jacoco.minimo.lineas>0.90</jacoco.minimo.lineas>
+        <jacoco.minimo.ramas>0.80</jacoco.minimo.ramas>
 
         <!-- SonarQube Cloud: el análisis lo lanza el CI solo en develop (push y PR con base develop)
              cuando existe el secreto SONAR_TOKEN. El plan Free analiza una única rama. -->
@@ -47,7 +46,7 @@
         <sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <!-- Fuera de la cobertura solo lo que no tiene lógica que probar (se sigue analizando como código):
              arranque de Spring, records de entrada/salida sin métodos (todo web/dto), entidades JPA de
-             solo constructor/getters (SeatAuditLog, ProcessedEvent) y la definición del documento OpenAPI.
+             solo constructor/getters (SeatAuditLog, ProcessedEvent).
              Se quedan DENTRO porque tienen lógica: domain/Hold, domain/SeatState y domain/KnownItinerary
              (transiciones de estado), config/InventoryProperties (valores por defecto y tope de la
              extensión) y todos los servicios, controladores y seguridad.
@@ -78,8 +77,7 @@
             **/web/dto/WaitlistRequest.java,
             **/web/dto/WaitlistResponse.java,
             **/domain/SeatAuditLog.java,
-            **/common/events/ProcessedEvent.java,
-            **/config/OpenApiConfig.java
+            **/common/events/ProcessedEvent.java
         </sonar.coverage.exclusions>
     </properties>
 
@@ -147,11 +145,17 @@
             <version>${springdoc.version}</version>
         </dependency>
 
-        <!-- Logs en JSON en PROD (logback-spring.xml). -->
+        <!-- HT-10: trazas distribuidas (Micrometer Tracing + OpenTelemetry, exportadas por OTLP si hay
+             OTEL_EXPORTER_OTLP_ENDPOINT). Versiones gestionadas por Spring Boot. Los logs en JSON usan el
+             logging estructurado de Boot (ECS) con LOG_FORMAT=json. -->
         <dependency>
-            <groupId>net.logstash.logback</groupId>
-            <artifactId>logstash-logback-encoder</artifactId>
-            <version>${logstash-logback.version}</version>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
         <dependency>
@@ -268,7 +272,6 @@
                         <exclude>**/web/dto/WaitlistResponse.class</exclude>
                         <exclude>**/domain/SeatAuditLog.class</exclude>
                         <exclude>**/common/events/ProcessedEvent.class</exclude>
-                        <exclude>**/config/OpenApiConfig.class</exclude>
                     </excludes>
                 </configuration>
                 <executions>

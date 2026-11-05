@@ -43,6 +43,13 @@ spring:
         jwt:
           jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:18001/.well-known/jwks.json}
 
+# HT-10: logs. Texto legible con traceId, spanId y requestId (del MDC) por defecto; con LOG_FORMAT=json, una
+# línea JSON por evento en formato ECS (logging.structured.format.console=ecs, ver ObservabilityEnvironment),
+# que incluye todo el MDC (traceId, spanId, requestId).
+logging:
+  pattern:
+    console: "%clr(%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}){faint} %clr(%5p) %clr([%X{traceId:-},%X{spanId:-}] [%X{requestId:-}]){magenta} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n%wEx"
+
 server:
   port: ${SERVER_PORT:18003}
   shutdown: graceful
@@ -59,6 +66,11 @@ management:
   metrics:
     tags:
       application: seat-inventory-service
+  # HT-10: trazas. Se muestrea TRACING_SAMPLING (10 % por defecto) y se exportan por OTLP/HTTP solo si
+  # OTEL_EXPORTER_OTLP_ENDPOINT tiene valor (vacío = no se exportan; ver ObservabilityEnvironment).
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING:0.1}
   info:
     env:
       enabled: true
@@ -69,6 +81,11 @@ info:
     commit: ${APP_COMMIT:local}
 
 tripbus:
+  # HT-10: "json" activa los logs ECS (ver ObservabilityEnvironment). En prod es json por defecto.
+  log-format: ${LOG_FORMAT:text}
+  # HT-10: URL del servidor que muestra Swagger (p. ej. la del API Gateway). Vacía: la del propio servicio.
+  openapi:
+    server-url: ${OPENAPI_SERVER_URL:}
   internal-token: ${INTERNAL_API_TOKEN:tripbus_internal_qa_token}
   events:
     enabled: ${EVENTS_ENABLED:true}
@@ -83,6 +100,8 @@ tripbus:
     lock-ttl: 15s
     lock-wait: 500ms
     catalog-url: ${CATALOG_URL:http://localhost:18002}
+    # HT-08: los viajes que salieron hace más de estos días se archivan (job nocturno, un solo nodo).
+    archive-after-days: ${ARCHIVE_AFTER_DAYS:90}
   jobs:
     sweep-interval-ms: 5000
     # US-031: el outbox se publica cada 500 ms; los publicados con más de 7 días se borran a diario.
@@ -91,3 +110,5 @@ tripbus:
     outbox-purge-cron: "0 30 3 * * *"
     # US-140: barrido de la lista de espera (cierre 30 min antes de la salida y filas sin procesar).
     waitlist-interval-ms: ${WAITLIST_INTERVAL_MS:30000}
+    # HT-08: archivo de viajes viejos, de noche (hora de Bogotá).
+    archive-cron: "0 15 4 * * *"

@@ -1,5 +1,6 @@
 package com.tripbus.seatinventory.web;
 
+import com.tripbus.seatinventory.domain.Tramo;
 import com.tripbus.seatinventory.service.OccupancyService;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
@@ -52,7 +53,7 @@ public class InternalController {
     @PostMapping("/holds")
     public ResponseEntity<HoldResponse> hold(@Valid @RequestBody InternalHoldRequest request) {
         HoldResponse hold = inventoryService.holdSeats(request.itineraryId(), request.seatNumbers(), request.userId(),
-                request.offerId());
+                request.offerId(), Tramo.de(request.fromOrden(), request.toOrden()));
         return ResponseEntity.status(HttpStatus.CREATED).body(hold);
     }
 
@@ -99,6 +100,10 @@ public class InternalController {
     /** US-119: catalog cambió el bus del viaje; 409 SEATS_CONFLICT si un asiento ocupado no existe en el nuevo. */
     @PostMapping("/itineraries/{itineraryId}/remap")
     public RemapSeatsResponse remap(@PathVariable UUID itineraryId, @Valid @RequestBody RemapSeatsRequest request) {
+        // US-141: con seats[] trae la categoría de cada asiento; con solo seatNumbers, como siempre.
+        if (request.seats() != null && !request.seats().isEmpty()) {
+            return lifecycleService.remapSeatsWithCategories(itineraryId, request.seats(), request.capacidad());
+        }
         return lifecycleService.remapSeats(itineraryId, request.seatNumbers(), request.capacidad());
     }
 

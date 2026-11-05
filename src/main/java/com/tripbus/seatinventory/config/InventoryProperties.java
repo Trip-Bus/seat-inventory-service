@@ -15,7 +15,8 @@ public record InventoryProperties(
         int maxSeatsPerHold,
         Duration lockTtl,
         Duration lockWait,
-        String catalogUrl) {
+        String catalogUrl,
+        int archiveAfterDays) {
 
     public InventoryProperties {
         holdTtl = holdTtl != null ? holdTtl : Duration.ofMinutes(10);
@@ -26,5 +27,7 @@ public record InventoryProperties(
         maxSeatsPerHold = maxSeatsPerHold > 0 ? maxSeatsPerHold : 6;
         lockTtl = lockTtl != null ? lockTtl : Duration.ofSeconds(15);
         lockWait = lockWait != null ? lockWait : Duration.ofMillis(500);
+        // HT-08: los viajes que salieron hace más de estos días pasan a las tablas *_archive.
+        archiveAfterDays = archiveAfterDays > 0 ? archiveAfterDays : 90;
     }
 }

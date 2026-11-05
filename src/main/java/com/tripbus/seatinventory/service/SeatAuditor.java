@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -25,6 +26,9 @@ import java.util.UUID;
  */
 @Component
 public class SeatAuditor {
+
+    /** Orígenes de auditoría que ocupan un tramo (no liberan nada). */
+    private static final Set<String> ORIGENES_QUE_OCUPAN = Set.of("HOLD", "SALE");
 
     private final SeatAuditLogRepository auditRepository;
     private final Outbox outbox;
@@ -56,10 +60,21 @@ public class SeatAuditor {
         payload.put("estadoNuevo", seat.getEstado().name());
         payload.put("offerId", seat.getOfferId());
         outbox.add(InventoryEvents.SEAT_STATE_CHANGED, payload);
-        if (seat.getEstado() == SeatStatus.DISPONIBLE && anterior != SeatStatus.DISPONIBLE) {
+        if (liberaAsiento(seat, anterior, origen)) {
             // US-140: un asiento volvió a la venta; la lista de espera del viaje se procesa tras el commit.
             events.publishEvent(new AsientoLiberado(seat.getItineraryId()));
         }
+    }
+
+    /**
+     * ¿El cambio deja algo libre? El asiento volvió a DISPONIBLE, o (US-142) un asiento TRAMO soltó un tramo: puede
+     * seguir TRAMO, pero ese tramo quedó libre. Retener o vender un tramo no libera nada.
+     */
+    static boolean liberaAsiento(SeatState seat, SeatStatus anterior, String origen) {
+        if (seat.getEstado() == SeatStatus.DISPONIBLE) {
+            return anterior != SeatStatus.DISPONIBLE;
+        }
+        return anterior == SeatStatus.TRAMO && !ORIGENES_QUE_OCUPAN.contains(origen);
     }
 
     /**
@@ -80,6 +95,10 @@ public class SeatAuditor {
         payload.put("offerId", hold.getOfferId());
         payload.put("bookingId", bookingId);
         payload.put("motivo", motivo);
+        if (!hold.esCompleta()) {
+            payload.put("desdeOrden", hold.getTramo().desde());
+            payload.put("hastaOrden", hold.getTramo().hasta());
+        }
         outbox.add(InventoryEvents.SEAT_RELEASED, payload);
     }
 }

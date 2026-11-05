@@ -34,6 +34,13 @@ public class WaitlistEntry {
     @Column(name = "hold_id")
     private UUID holdId;
 
+    /** US-142: tramo que espera (el recorrido completo si se anotó sin tramo). */
+    @Column(name = "desde_orden", nullable = false)
+    private int desdeOrden = Tramo.PRIMERA_PARADA;
+
+    @Column(name = "hasta_orden", nullable = false)
+    private int hastaOrden = Tramo.FIN;
+
     @Column(name = "creado_en", nullable = false)
     private Instant creadoEn;
 
@@ -51,6 +58,17 @@ public class WaitlistEntry {
         this.estado = WaitlistStatus.ESPERANDO;
         this.creadoEn = now;
         this.actualizadoEn = now;
+    }
+
+    /** US-142: espera asientos solo en ese tramo. */
+    public WaitlistEntry enTramo(Tramo tramo) {
+        this.desdeOrden = tramo.desde();
+        this.hastaOrden = tramo.hasta();
+        return this;
+    }
+
+    public Tramo getTramo() {
+        return new Tramo(desdeOrden, hastaOrden);
     }
 
     /** Se le creó una retención con los asientos que esperaba. */

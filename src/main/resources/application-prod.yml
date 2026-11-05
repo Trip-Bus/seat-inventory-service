@@ -13,3 +13,7 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
+
+tripbus:
+  # HT-10: en PROD los logs van en JSON (ECS) salvo que se pida LOG_FORMAT=text.
+  log-format: ${LOG_FORMAT:json}

@@ -4,6 +4,7 @@ import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.domain.Hold;
 import com.tripbus.seatinventory.domain.KnownItinerary;
 import com.tripbus.seatinventory.domain.SeatStatus;
+import com.tripbus.seatinventory.domain.Tramo;
 import com.tripbus.seatinventory.domain.WaitlistEntry;
 import com.tripbus.seatinventory.domain.WaitlistStatus;
 import com.tripbus.seatinventory.repository.SeatStateRepository;
@@ -44,6 +45,12 @@ public class WaitlistService {
      */
     @Transactional
     public WaitlistResponse anotarse(UUID itineraryId, UUID userId, int cantidad) {
+        return anotarse(itineraryId, userId, cantidad, Tramo.COMPLETO);
+    }
+
+    /** US-142: en un tramo, cuentan los asientos libres en ese tramo y se le ofrecerán asientos de ese tramo. */
+    @Transactional
+    public WaitlistResponse anotarse(UUID itineraryId, UUID userId, int cantidad, Tramo tramo) {
         KnownItinerary itinerary = inventoryService.ensureItinerary(itineraryId);
         // PostgreSQL guarda microsegundos: así la posición se calcula igual antes y después de guardar.
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
@@ -58,14 +65,16 @@ public class WaitlistService {
                 WaitlistStatus.ACTIVOS)) {
             throw alreadyInWaitlist();
         }
-        long disponibles = seatRepository.countByItineraryIdAndEstado(itineraryId, SeatStatus.DISPONIBLE);
+        long disponibles = tramo.esCompleto()
+                ? seatRepository.countByItineraryIdAndEstado(itineraryId, SeatStatus.DISPONIBLE)
+                : seatRepository.libresEnTramo(itineraryId, tramo.desde(), tramo.hasta()).size();
         if (disponibles >= cantidad) {
             throw new ApiException(HttpStatus.CONFLICT, "SEATS_AVAILABLE",
                     "Hay asientos disponibles: puedes reservarlos directamente", Map.of("disponibles", disponibles));
         }
         try {
             WaitlistEntry entry = waitlistRepository.saveAndFlush(
-                    new WaitlistEntry(UUID.randomUUID(), itineraryId, userId, cantidad, now));
+                    new WaitlistEntry(UUID.randomUUID(), itineraryId, userId, cantidad, now).enTramo(tramo));
             return toResponse(entry);
         } catch (DataIntegrityViolationException e) {
             // Dos solicitudes simultáneas del mismo pasajero: el índice único de turnos activos decide.

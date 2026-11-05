@@ -64,6 +64,13 @@ public class Hold {
     @Column(name = "motivo_cierre")
     private String motivoCierre;
 
+    /** US-142: tramo [desde_orden, hasta_orden) que ocupa; el recorrido completo es [1, 32767). */
+    @Column(name = "desde_orden", nullable = false)
+    private int desdeOrden = Tramo.PRIMERA_PARADA;
+
+    @Column(name = "hasta_orden", nullable = false)
+    private int hastaOrden = Tramo.FIN;
+
     @Version
     private long version;
 
@@ -79,6 +86,21 @@ public class Hold {
         this.creadoEn = now;
         this.expiraEn = now.plus(ttl);
         this.estado = HoldStatus.ACTIVA;
+    }
+
+    /** US-142: la retención ocupa sus asientos solo en ese tramo. */
+    public Hold enTramo(Tramo tramo) {
+        this.desdeOrden = tramo.desde();
+        this.hastaOrden = tramo.hasta();
+        return this;
+    }
+
+    public Tramo getTramo() {
+        return new Tramo(desdeOrden, hastaOrden);
+    }
+
+    public boolean esCompleta() {
+        return getTramo().esCompleto();
     }
 
     public boolean vencida(Instant now) {

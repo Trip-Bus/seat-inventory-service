@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.tripbus.seatinventory.common.error.ApiException;
 import com.tripbus.seatinventory.common.events.DomainEventHandler;
 import com.tripbus.seatinventory.common.events.EventEnvelope;
+import com.tripbus.seatinventory.domain.SeatSpec;
 import com.tripbus.seatinventory.service.SeatInventoryService;
 import com.tripbus.seatinventory.service.SeatLifecycleService;
 import com.tripbus.seatinventory.service.WaitlistProcessor;
@@ -50,9 +51,18 @@ public class InventoryEventsHandler implements DomainEventHandler {
         JsonNode p = event.payload();
         switch (event.type()) {
             case InventoryEvents.ITINERARY_PUBLISHED -> {
+                UUID companyId = p.hasNonNull("companyId") ? uuid(p, "companyId") : null;
+                if (p.path("seats").isArray() && !p.path("seats").isEmpty()) {
+                    // US-141: seats [{numero, categoria}]; sin categoría el asiento queda ESTANDAR.
+                    List<SeatSpec> specs = new ArrayList<>();
+                    p.path("seats").forEach(s -> specs.add(new SeatSpec(s.path("numero").asText(""),
+                            s.hasNonNull("categoria") ? s.get("categoria").asText() : null)));
+                    inventoryService.onItineraryPublishedWithSeats(uuid(p, ITINERARY_ID), specs,
+                            instant(p, FECHA_SALIDA), companyId);
+                    return;
+                }
                 List<String> seats = new ArrayList<>();
                 p.path("seatNumbers").forEach(n -> seats.add(n.asText()));
-                UUID companyId = p.hasNonNull("companyId") ? uuid(p, "companyId") : null;
                 if (!seats.isEmpty()) {
                     inventoryService.onItineraryPublished(uuid(p, ITINERARY_ID), seats, instant(p, FECHA_SALIDA),
                             companyId);

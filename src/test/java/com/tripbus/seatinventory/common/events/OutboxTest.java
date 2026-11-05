@@ -1,6 +1,7 @@
 package com.tripbus.seatinventory.common.events;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tripbus.seatinventory.common.observability.TracePropagation;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -19,7 +20,7 @@ class OutboxTest {
     private static final Instant AHORA = Instant.parse("2026-10-12T15:00:00.123456789Z");
 
     private final Outbox outbox = new Outbox(mock(JdbcTemplate.class), new ObjectMapper(),
-            Clock.fixed(AHORA, ZoneOffset.UTC));
+            Clock.fixed(AHORA, ZoneOffset.UTC), mock(TracePropagation.class));
 
     @Test
     void creadoEnEsEstrictamenteCrecienteAunqueElRelojNoAvance() {
