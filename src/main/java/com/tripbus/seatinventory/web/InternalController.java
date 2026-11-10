@@ -1,12 +1,22 @@
 package com.tripbus.seatinventory.web;
 
+import com.tripbus.seatinventory.domain.Tramo;
+import com.tripbus.seatinventory.service.OccupancyService;
 import com.tripbus.seatinventory.service.SeatInventoryService;
+import com.tripbus.seatinventory.service.SeatLifecycleService;
 import com.tripbus.seatinventory.web.dto.ConfirmSaleRequest;
 import com.tripbus.seatinventory.web.dto.HoldResponse;
 import com.tripbus.seatinventory.web.dto.InternalHoldRequest;
+import com.tripbus.seatinventory.web.dto.OccupancyResponse;
 import com.tripbus.seatinventory.web.dto.OfferSeatsRequest;
 import com.tripbus.seatinventory.web.dto.OfferSeatsResponse;
 import com.tripbus.seatinventory.web.dto.ReleaseRequest;
+import com.tripbus.seatinventory.web.dto.RemapSeatsRequest;
+import com.tripbus.seatinventory.web.dto.RemapSeatsResponse;
+import com.tripbus.seatinventory.web.dto.SwapSeatRequest;
+import com.tripbus.seatinventory.web.dto.SwapSeatResponse;
+import com.tripbus.seatinventory.web.dto.VoidSaleRequest;
+import com.tripbus.seatinventory.web.dto.VoidSaleResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -15,8 +25,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -28,15 +40,20 @@ import java.util.UUID;
 public class InternalController {
 
     private final SeatInventoryService inventoryService;
+    private final SeatLifecycleService lifecycleService;
+    private final OccupancyService occupancyService;
 
-    public InternalController(SeatInventoryService inventoryService) {
+    public InternalController(SeatInventoryService inventoryService, SeatLifecycleService lifecycleService,
+                              OccupancyService occupancyService) {
         this.inventoryService = inventoryService;
+        this.lifecycleService = lifecycleService;
+        this.occupancyService = occupancyService;
     }
 
     @PostMapping("/holds")
     public ResponseEntity<HoldResponse> hold(@Valid @RequestBody InternalHoldRequest request) {
         HoldResponse hold = inventoryService.holdSeats(request.itineraryId(), request.seatNumbers(), request.userId(),
-                request.offerId());
+                request.offerId(), Tramo.de(request.fromOrden(), request.toOrden()));
         return ResponseEntity.status(HttpStatus.CREATED).body(hold);
     }
 
@@ -64,5 +81,35 @@ public class InternalController {
     public ResponseEntity<Void> releaseOfferSeats(@PathVariable UUID offerId) {
         inventoryService.releaseOfferSeats(offerId);
         return ResponseEntity.noContent().build();
+    }
+
+    /** US-151: booking devuelve al inventario asientos vendidos a una reserva. Idempotente. */
+    @PostMapping("/sales/void")
+    public VoidSaleResponse voidSale(@Valid @RequestBody VoidSaleRequest request) {
+        return lifecycleService.voidSale(request.itineraryId(), request.bookingId(), request.seatNumbers(),
+                request.motivo());
+    }
+
+    /** US-139: la reserva cambia un asiento por otro del mismo viaje, en una sola transacción. */
+    @PostMapping("/sales/swap")
+    public SwapSeatResponse swapSeat(@Valid @RequestBody SwapSeatRequest request) {
+        return lifecycleService.swapSeat(request.itineraryId(), request.bookingId(), request.fromSeat(),
+                request.toSeat());
+    }
+
+    /** US-119: catalog cambió el bus del viaje; 409 SEATS_CONFLICT si un asiento ocupado no existe en el nuevo. */
+    @PostMapping("/itineraries/{itineraryId}/remap")
+    public RemapSeatsResponse remap(@PathVariable UUID itineraryId, @Valid @RequestBody RemapSeatsRequest request) {
+        // US-141: con seats[] trae la categoría de cada asiento; con solo seatNumbers, como siempre.
+        if (request.seats() != null && !request.seats().isEmpty()) {
+            return lifecycleService.remapSeatsWithCategories(itineraryId, request.seats(), request.capacidad());
+        }
+        return lifecycleService.remapSeats(itineraryId, request.seatNumbers(), request.capacidad());
+    }
+
+    /** US-191: ocupación y abandono de compra de hasta 200 viajes (panel de catalog, reportes de booking). */
+    @GetMapping("/occupancy")
+    public List<OccupancyResponse> occupancy(@RequestParam List<UUID> itineraryIds) {
+        return occupancyService.ocupaciones(itineraryIds);
     }
 }

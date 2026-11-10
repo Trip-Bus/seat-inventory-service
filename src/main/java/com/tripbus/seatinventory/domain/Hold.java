@@ -23,6 +23,10 @@ import java.util.UUID;
 @Table(name = "holds")
 public class Hold {
 
+    /** Motivo con el que el pasajero libera su propia retención (US-191: cuenta como abandono). */
+    public static final String LIBERADA_POR_USUARIO = "LIBERADA_POR_USUARIO";
+    private static final int MAX_MOTIVO = 200;
+
     @Id
     private UUID id;
 
@@ -56,6 +60,17 @@ public class Hold {
     @Column(nullable = false)
     private HoldStatus estado;
 
+    /** US-191: por qué se cerró (LIBERADA_POR_USUARIO, PAGO_RECHAZADO, EXPIRADA, ...). NULL mientras está activa. */
+    @Column(name = "motivo_cierre")
+    private String motivoCierre;
+
+    /** US-142: tramo [desde_orden, hasta_orden) que ocupa; el recorrido completo es [1, 32767). */
+    @Column(name = "desde_orden", nullable = false)
+    private int desdeOrden = Tramo.PRIMERA_PARADA;
+
+    @Column(name = "hasta_orden", nullable = false)
+    private int hastaOrden = Tramo.FIN;
+
     @Version
     private long version;
 
@@ -73,6 +88,21 @@ public class Hold {
         this.estado = HoldStatus.ACTIVA;
     }
 
+    /** US-142: la retención ocupa sus asientos solo en ese tramo. */
+    public Hold enTramo(Tramo tramo) {
+        this.desdeOrden = tramo.desde();
+        this.hastaOrden = tramo.hasta();
+        return this;
+    }
+
+    public Tramo getTramo() {
+        return new Tramo(desdeOrden, hastaOrden);
+    }
+
+    public boolean esCompleta() {
+        return getTramo().esCompleto();
+    }
+
     public boolean vencida(Instant now) {
         return !expiraEn.isAfter(now);
     }
@@ -87,8 +117,20 @@ public class Hold {
         this.bookingId = bookingId;
     }
 
-    public void cerrar(HoldStatus estadoFinal) {
+    public void cerrar(HoldStatus estadoFinal, String motivo) {
         this.estado = estadoFinal;
+        this.motivoCierre = motivo != null && motivo.length() > MAX_MOTIVO ? motivo.substring(0, MAX_MOTIVO) : motivo;
+    }
+
+    /** US-151: el asiento anulado deja de ser parte de la compra (la auditoría conserva que lo fue). */
+    public void quitarAsiento(String seatNumber) {
+        this.seatNumbers.remove(seatNumber);
+    }
+
+    /** US-139: la compra cambia un asiento por otro del mismo viaje. */
+    public void cambiarAsiento(String fromSeat, String toSeat) {
+        this.seatNumbers.remove(fromSeat);
+        this.seatNumbers.add(toSeat);
     }
 
     public UUID getId() {
@@ -129,5 +171,9 @@ public class Hold {
 
     public HoldStatus getEstado() {
         return estado;
+    }
+
+    public String getMotivoCierre() {
+        return motivoCierre;
     }
 }

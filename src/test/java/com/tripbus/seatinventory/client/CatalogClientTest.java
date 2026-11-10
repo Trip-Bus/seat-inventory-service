@@ -55,7 +55,7 @@ class CatalogClientTest {
     }
 
     private static InventoryProperties propiedades(String catalogUrl) {
-        return new InventoryProperties(null, null, 0, null, null, catalogUrl);
+        return new InventoryProperties(null, null, 0, null, null, catalogUrl, 0);
     }
 
     @Test

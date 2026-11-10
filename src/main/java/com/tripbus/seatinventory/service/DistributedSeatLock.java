@@ -1,7 +1,9 @@
 package com.tripbus.seatinventory.service;
 
 import com.tripbus.seatinventory.common.error.ApiException;
+import com.tripbus.seatinventory.common.observability.InventoryMetrics;
 import com.tripbus.seatinventory.config.InventoryProperties;
+import com.tripbus.seatinventory.domain.Tramo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -37,23 +39,39 @@ public class DistributedSeatLock {
 
     private final StringRedisTemplate redis;
     private final InventoryProperties properties;
+    private final InventoryMetrics metrics;
 
-    public DistributedSeatLock(StringRedisTemplate redis, InventoryProperties properties) {
+    public DistributedSeatLock(StringRedisTemplate redis, InventoryProperties properties, InventoryMetrics metrics) {
         this.redis = redis;
         this.properties = properties;
+        this.metrics = metrics;
     }
 
     public static String key(UUID itineraryId, String seatNumber) {
         return "lock:{itinerario:" + itineraryId + "}:asiento:" + seatNumber;
     }
 
+    /** US-142: llave del asiento en un tramo; la del recorrido completo es la de siempre. */
+    public static String key(UUID itineraryId, String seatNumber, Tramo tramo) {
+        return tramo.esCompleto() ? key(itineraryId, seatNumber)
+                : key(itineraryId, seatNumber) + ":tramo:" + tramo.desde() + "-" + tramo.hasta();
+    }
+
     public SeatLocks acquireAll(UUID itineraryId, List<String> sortedSeats) {
+        return acquireAll(itineraryId, sortedSeats, Tramo.COMPLETO);
+    }
+
+    /**
+     * US-142: con tramo, un lock por asiento y tramo: dos pedidos del mismo asiento y tramo compiten en Redis;
+     * los de tramos distintos los ordena el SELECT ... FOR UPDATE de la fila del asiento (segunda línea).
+     */
+    public SeatLocks acquireAll(UUID itineraryId, List<String> sortedSeats, Tramo tramo) {
         String token = UUID.randomUUID().toString();
         List<String> acquired = new ArrayList<>();
         long deadline = System.nanoTime() + properties.lockWait().toNanos();
         try {
             for (String seat : sortedSeats) {
-                String key = key(itineraryId, seat);
+                String key = key(itineraryId, seat, tramo);
                 while (true) {
                     if (Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(key, token, properties.lockTtl()))) {
                         acquired.add(key);
@@ -61,6 +79,7 @@ public class DistributedSeatLock {
                     }
                     if (System.nanoTime() >= deadline) {
                         release(acquired, token);
+                        metrics.lockFallido();
                         throw ApiException.conflict("SEAT_LOCKED",
                                 "El asiento " + seat + " está siendo tomado por otro pasajero. Intenta de nuevo.");
                     }

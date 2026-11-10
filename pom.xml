@@ -28,17 +28,15 @@
         <postgresql.version>42.7.12</postgresql.version>
 
         <springdoc.version>2.8.17</springdoc.version>
-        <logstash-logback.version>8.0</logstash-logback.version>
         <jacoco.version>0.8.12</jacoco.version>
         <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
 
         <!-- Mínimos de cobertura total que exige jacoco:check (ver jacoco-maven-plugin).
              La cobertura nunca puede bajar: si agregas pruebas, sube el mínimo.
-             Fijados con la medición del 2026-10-12 (outbox, US-031) redondeada hacia abajo al 5 %:
-             líneas 68,9 % -> 0.65; ramas 50,5 % -> 0.50 (por debajo del 0.60 de referencia: subirlo es la
-             próxima meta). -->
-        <jacoco.minimo.lineas>0.65</jacoco.minimo.lineas>
-        <jacoco.minimo.ramas>0.50</jacoco.minimo.ramas>
+             Fijados con la medición del 2026-11-05 (Sprints 5 y 6, HT-10/US-141/US-142/HT-08) redondeada hacia abajo
+             al 5 %: líneas 94,8 % -> 0.90; ramas 83,6 % -> 0.80. -->
+        <jacoco.minimo.lineas>0.90</jacoco.minimo.lineas>
+        <jacoco.minimo.ramas>0.80</jacoco.minimo.ramas>
 
         <!-- SonarQube Cloud: el análisis lo lanza el CI solo en develop (push y PR con base develop)
              cuando existe el secreto SONAR_TOKEN. El plan Free analiza una única rama. -->
@@ -48,7 +46,7 @@
         <sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <!-- Fuera de la cobertura solo lo que no tiene lógica que probar (se sigue analizando como código):
              arranque de Spring, records de entrada/salida sin métodos (todo web/dto), entidades JPA de
-             solo constructor/getters (SeatAuditLog, ProcessedEvent) y la definición del documento OpenAPI.
+             solo constructor/getters (SeatAuditLog, ProcessedEvent).
              Se quedan DENTRO porque tienen lógica: domain/Hold, domain/SeatState y domain/KnownItinerary
              (transiciones de estado), config/InventoryProperties (valores por defecto y tope de la
              extensión) y todos los servicios, controladores y seguridad.
@@ -57,18 +55,29 @@
         <sonar.coverage.exclusions>
             **/SeatInventoryApplication.java,
             **/web/dto/AvailabilityResponse.java,
+            **/web/dto/BlockSeatsRequest.java,
+            **/web/dto/BlockSeatsResponse.java,
             **/web/dto/ConfirmSaleRequest.java,
             **/web/dto/HoldRequest.java,
             **/web/dto/HoldResponse.java,
             **/web/dto/InternalHoldRequest.java,
+            **/web/dto/OccupancyResponse.java,
             **/web/dto/OfferSeatsRequest.java,
             **/web/dto/OfferSeatsResponse.java,
             **/web/dto/ReleaseRequest.java,
+            **/web/dto/RemapSeatsRequest.java,
+            **/web/dto/RemapSeatsResponse.java,
             **/web/dto/SeatStatesResponse.java,
             **/web/dto/SeatView.java,
+            **/web/dto/SwapSeatRequest.java,
+            **/web/dto/SwapSeatResponse.java,
+            **/web/dto/UnblockSeatsRequest.java,
+            **/web/dto/VoidSaleRequest.java,
+            **/web/dto/VoidSaleResponse.java,
+            **/web/dto/WaitlistRequest.java,
+            **/web/dto/WaitlistResponse.java,
             **/domain/SeatAuditLog.java,
-            **/common/events/ProcessedEvent.java,
-            **/config/OpenApiConfig.java
+            **/common/events/ProcessedEvent.java
         </sonar.coverage.exclusions>
     </properties>
 
@@ -136,11 +145,17 @@
             <version>${springdoc.version}</version>
         </dependency>
 
-        <!-- Logs en JSON en PROD (logback-spring.xml). -->
+        <!-- HT-10: trazas distribuidas (Micrometer Tracing + OpenTelemetry, exportadas por OTLP si hay
+             OTEL_EXPORTER_OTLP_ENDPOINT). Versiones gestionadas por Spring Boot. Los logs en JSON usan el
+             logging estructurado de Boot (ECS) con LOG_FORMAT=json. -->
         <dependency>
-            <groupId>net.logstash.logback</groupId>
-            <artifactId>logstash-logback-encoder</artifactId>
-            <version>${logstash-logback.version}</version>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
         <dependency>
@@ -234,18 +249,29 @@
                     <excludes>
                         <exclude>**/SeatInventoryApplication.class</exclude>
                         <exclude>**/web/dto/AvailabilityResponse.class</exclude>
+                        <exclude>**/web/dto/BlockSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/BlockSeatsResponse.class</exclude>
                         <exclude>**/web/dto/ConfirmSaleRequest.class</exclude>
                         <exclude>**/web/dto/HoldRequest.class</exclude>
                         <exclude>**/web/dto/HoldResponse.class</exclude>
                         <exclude>**/web/dto/InternalHoldRequest.class</exclude>
+                        <exclude>**/web/dto/OccupancyResponse*.class</exclude>
                         <exclude>**/web/dto/OfferSeatsRequest.class</exclude>
                         <exclude>**/web/dto/OfferSeatsResponse.class</exclude>
                         <exclude>**/web/dto/ReleaseRequest.class</exclude>
+                        <exclude>**/web/dto/RemapSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/RemapSeatsResponse.class</exclude>
                         <exclude>**/web/dto/SeatStatesResponse*.class</exclude>
                         <exclude>**/web/dto/SeatView.class</exclude>
+                        <exclude>**/web/dto/SwapSeatRequest.class</exclude>
+                        <exclude>**/web/dto/SwapSeatResponse.class</exclude>
+                        <exclude>**/web/dto/UnblockSeatsRequest.class</exclude>
+                        <exclude>**/web/dto/VoidSaleRequest.class</exclude>
+                        <exclude>**/web/dto/VoidSaleResponse.class</exclude>
+                        <exclude>**/web/dto/WaitlistRequest.class</exclude>
+                        <exclude>**/web/dto/WaitlistResponse.class</exclude>
                         <exclude>**/domain/SeatAuditLog.class</exclude>
                         <exclude>**/common/events/ProcessedEvent.class</exclude>
-                        <exclude>**/config/OpenApiConfig.class</exclude>
                     </excludes>
                 </configuration>
                 <executions>

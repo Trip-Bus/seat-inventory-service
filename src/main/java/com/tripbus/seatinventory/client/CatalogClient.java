@@ -32,7 +32,8 @@ public class CatalogClient {
                 .build();
     }
 
-    public record SeatMap(UUID itineraryId, int capacidad, List<String> asientos) {
+    /** companyId puede no venir (catalog anterior a US-112): entonces solo el ADMIN gestiona sus bloqueos. */
+    public record SeatMap(UUID itineraryId, int capacidad, List<String> asientos, UUID companyId) {
     }
 
     public Optional<SeatMap> seatMap(UUID itineraryId) {

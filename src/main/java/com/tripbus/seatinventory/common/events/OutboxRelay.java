@@ -45,7 +45,7 @@ public class OutboxRelay {
         this.retention = retention;
     }
 
-    private record Pending(UUID id, String type, String payload, Instant creadoEn) {
+    private record Pending(UUID id, String type, String payload, Instant creadoEn, String traceparent) {
     }
 
     @Scheduled(fixedDelayString = "${tripbus.jobs.outbox-relay-ms:500}", initialDelay = 1000)
@@ -63,17 +63,18 @@ public class OutboxRelay {
     /** Publica hasta BATCH pendientes; devuelve cuántos quedaron publicados. */
     int publishBatch() {
         List<Pending> pendientes = jdbc.query("""
-                SELECT id, event_type, payload::text AS payload, creado_en FROM outbox
+                SELECT id, event_type, payload::text AS payload, creado_en, trace_parent FROM outbox
                 WHERE publicado_en IS NULL
                 ORDER BY creado_en
                 LIMIT ?
                 FOR UPDATE SKIP LOCKED
                 """, (rs, n) -> new Pending(rs.getObject("id", UUID.class), rs.getString("event_type"),
-                rs.getString("payload"), rs.getObject("creado_en", OffsetDateTime.class).toInstant()), BATCH);
+                rs.getString("payload"), rs.getObject("creado_en", OffsetDateTime.class).toInstant(),
+                rs.getString("trace_parent")), BATCH);
         List<UUID> publicados = new ArrayList<>();
         for (Pending p : pendientes) {
             try {
-                publisher.publish(p.id().toString(), p.type(), p.creadoEn(), p.payload());
+                publisher.publish(p.id().toString(), p.type(), p.creadoEn(), p.payload(), p.traceparent());
             } catch (RuntimeException e) {
                 log.warn("Redis no disponible; {} evento(s) del outbox quedan pendientes: {}",
                         pendientes.size() - publicados.size(), e.getMessage());

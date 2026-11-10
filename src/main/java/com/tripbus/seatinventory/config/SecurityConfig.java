@@ -29,6 +29,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(a -> a
                         .requestMatchers("/actuator/health/**", "/actuator/info", "/actuator/prometheus").permitAll()
                         .requestMatchers("/internal/**").hasRole(InternalTokenFilter.INTERNAL_ROLE)
+                        // US-191: la ocupación es del operador/ADMIN (va antes del permitAll del mapa de asientos).
+                        .requestMatchers(HttpMethod.GET, "/seats/itineraries/*/occupancy").authenticated()
                         // Ver el mapa de asientos y la disponibilidad no requiere cuenta.
                         .requestMatchers(HttpMethod.GET, "/seats/itineraries/**", "/seats/availability").permitAll()
                         // Swagger (en prod springdoc está apagado y estas rutas dan 404) y página de error.
